@@ -8,8 +8,8 @@ window.SDS_CONFIG = Object.freeze({
   facilityName: "Facility safety library",
   emergencyLabel: "",
   emergencyHref: "",
-  aiEnabled: false,
-  aiProxyUrl: "",
+  aiEnabled: true,
+  aiProxyUrl: "https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api/v1/ask",
   adminApiUrl: "https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api",
   catalogApiUrl: "https://jxvsxwsmfycvewxeyxmp.supabase.co/functions/v1/sds-api/v1/catalog",
   maxQuestionLength: 500

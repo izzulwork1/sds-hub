@@ -7,6 +7,12 @@ import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_AUDIT_LENGTH = 50000;
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const ASK_PDF_MAX_BYTES = 12 * 1024 * 1024;
+const ASK_RATE_LIMIT = 10;
+const ASK_RATE_WINDOW_MS = 60000;
+const ASK_GEMINI_TIMEOUT_MS = 25000;
+const STATIC_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+let catalogCache: { fetchedAt: number; documents: Record<string, unknown>[] } | null = null;
 
 Deno.serve(async (request) => {
   try {
@@ -35,6 +41,8 @@ async function route(request: Request) {
 
   const publicFile = path.match(/^\/v1\/documents\/([a-f0-9-]+)\/file$/i);
   if (publicFile && request.method === "GET") return streamFile(publicFile[1], "approved", false, cors);
+
+  if (path === "/v1/ask" && request.method === "POST") return askQuestion(request, cors);
 
   if (!path.startsWith("/v1/admin")) return json({ error: "Not found." }, 404, cors);
   if (!await authorized(request)) return json({ error: "Administrator authorization is required." }, 401, { ...cors, "WWW-Authenticate": "Bearer" });
@@ -301,6 +309,161 @@ async function publicCatalog(cors: Record<string, string> | null) {
       recommendedUse: row.recommended_use || ""
     }))
   }, 200, cors);
+}
+
+// Public, grounded Q&A for end users. Answers only from the selected official SDS.
+async function askQuestion(request: Request, cors: Record<string, string> | null) {
+  if (!cors) return json({ error: "Origin is not allowed." }, 403);
+  const geminiKey = Deno.env.get("GEMINI_API_KEY") || "";
+  if (!geminiKey) return json({ error: "AI assistance is not configured." }, 503, cors);
+
+  const body = await readJson(request);
+  const chemicalId = String(body.chemicalId || "").trim();
+  const question = String(body.question || "").trim();
+  if (question.length < 3 || question.length > 500) return json({ error: "Ask a question between 3 and 500 characters." }, 400, cors);
+  if (!UUID_PATTERN.test(chemicalId) && !STATIC_ID_PATTERN.test(chemicalId)) return json({ error: "A valid document id is required." }, 400, cors);
+
+  if (!(await askRateAllowed(request))) {
+    return json({ error: "Question limit reached. Open the official SDS and try again shortly." }, 429, { ...cors, "Retry-After": "60" });
+  }
+
+  let resolved: { name: string; pdfUrl: string; revisionDate: string } | null;
+  try {
+    resolved = await resolveSdsForAsk(chemicalId);
+  } catch (error) {
+    console.error("Ask resolve failed", safeError(error));
+    return json({ error: "The selected SDS could not be located." }, 502, cors);
+  }
+  if (!resolved) return json({ error: "AI assistance is available only for approved SDS documents in the catalog." }, 404, cors);
+
+  let pdfBytes: Uint8Array;
+  try {
+    pdfBytes = await fetchAskPdf(resolved.pdfUrl);
+  } catch (error) {
+    console.error("Ask PDF fetch failed", safeError(error));
+    return json({ error: "The official SDS PDF is temporarily unavailable. Open it directly for the answer." }, 502, cors);
+  }
+
+  try {
+    const answer = await answerFromSds(geminiKey, resolved, question, pdfBytes);
+    return json({ answer, chemicalId, revisionDate: resolved.revisionDate }, 200, cors);
+  } catch (error) {
+    console.error("Ask Gemini failed", safeError(error));
+    return json({ error: "AI assistance is unavailable. Open the official SDS for authoritative information." }, 502, cors);
+  }
+}
+
+async function resolveSdsForAsk(chemicalId: string) {
+  if (UUID_PATTERN.test(chemicalId)) {
+    const rows = await selectRows("sds_documents", `select=product_name,trade_name,revision_date,approved_download_url,status&id=eq.${chemicalId}&status=eq.Approved&limit=1`);
+    const doc = rows[0];
+    if (!doc || !doc.approved_download_url) return null;
+    return {
+      name: String(doc.product_name || doc.trade_name || "the selected product").slice(0, 200),
+      pdfUrl: String(doc.approved_download_url),
+      revisionDate: /^\d{4}-\d{2}-\d{2}$/.test(String(doc.revision_date || "")) ? String(doc.revision_date) : ""
+    };
+  }
+  const documents = await loadStaticCatalog();
+  const doc = documents.find((item) => item?.id === chemicalId);
+  if (!doc) return null;
+  if (String(doc.documentType || "SDS") !== "SDS") return null;
+  const file = String(doc.file || "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._,'-]{0,190}\.pdf$/.test(file)) return null;
+  const explicitUrl = typeof doc.pdfUrl === "string" && /^https:\/\//.test(doc.pdfUrl) ? doc.pdfUrl : "";
+  return {
+    name: String(doc.name || "the selected product").slice(0, 200),
+    pdfUrl: explicitUrl || `${pagesBaseUrl()}pdfs/${file}`,
+    revisionDate: /^\d{4}-\d{2}-\d{2}$/.test(String(doc.revisionDate || "")) ? String(doc.revisionDate) : ""
+  };
+}
+
+async function loadStaticCatalog(): Promise<Record<string, unknown>[]> {
+  if (catalogCache && Date.now() - catalogCache.fetchedAt < 60000) return catalogCache.documents;
+  const response = await fetch(`${pagesBaseUrl()}data/sds-data.json`, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`Static catalog returned HTTP ${response.status}`);
+  const payload = await response.json();
+  const documents = payload?.schemaVersion === 1 && Array.isArray(payload.documents) ? payload.documents : [];
+  catalogCache = { fetchedAt: Date.now(), documents };
+  return documents;
+}
+
+async function fetchAskPdf(pdfUrl: string) {
+  const parsed = new URL(pdfUrl);
+  const allowedHosts = new Set([
+    new URL(pagesBaseUrl()).host, "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"
+  ]);
+  if (parsed.protocol !== "https:" || !allowedHosts.has(parsed.host)) throw new Error("Disallowed SDS PDF location");
+  const response = await fetch(pdfUrl, { headers: { Accept: "application/pdf" }, redirect: "follow" });
+  if (!response.ok) throw new Error(`SDS PDF returned HTTP ${response.status}`);
+  if (Number(response.headers.get("Content-Length") || 0) > ASK_PDF_MAX_BYTES) throw new Error("SDS PDF exceeds the AI size limit");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > ASK_PDF_MAX_BYTES) throw new Error("SDS PDF exceeds the AI size limit");
+  if (new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("Approved file is not a valid PDF");
+  return bytes;
+}
+
+async function answerFromSds(apiKey: string, resolved: { name: string; revisionDate: string }, question: string, pdfBytes: Uint8Array) {
+  const model = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ASK_GEMINI_TIMEOUT_MS);
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: "You are a document-grounded workplace safety assistant. Answer ONLY from the attached official Safety Data Sheet. If the answer is not in this SDS, say you cannot determine it from this document and point the worker to the relevant SDS section and the site safety manager. Never invent exposure limits, PPE, first-aid steps, incompatibilities, or disposal steps. Never override the SDS, the site emergency plan, emergency services, poison control, or medical professionals. Reply in the same language as the worker's question. Use concise plain-text bullets and name the SDS section numbers you used." }] },
+        contents: [{ role: "user", parts: [
+          { inline_data: { mime_type: "application/pdf", data: askBytesToBase64(pdfBytes) } },
+          { text: `Product: ${resolved.name}\nSDS revision: ${resolved.revisionDate || "Not stated"}\nWorker question: ${question}` }
+        ] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 800 }
+      }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`Gemini returned HTTP ${response.status}`);
+    const payload = await response.json();
+    const answer = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text).filter((text: unknown) => typeof text === "string").join("\n").trim();
+    if (!answer) throw new Error("Gemini returned no answer");
+    return `Supplemental AI summary — verify against the official SDS:\n\n${answer}`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function askRateAllowed(request: Request) {
+  const ipHash = await hashClientIp(request);
+  const since = new Date(Date.now() - ASK_RATE_WINDOW_MS).toISOString();
+  try {
+    const rows = await selectRows("sds_ask_usage", `select=id&ip_hash=eq.${ipHash}&created_at=gte.${encodeURIComponent(since)}`);
+    if ((rows?.length || 0) >= ASK_RATE_LIMIT) return false;
+    await insertRows("sds_ask_usage", { ip_hash: ipHash }, false);
+    return true;
+  } catch (error) {
+    // Fail open: never block access to safety information because the rate-limit table is missing or unreachable.
+    console.warn("Ask rate-limit check skipped", safeError(error));
+    return true;
+  }
+}
+
+async function hashClientIp(request: Request) {
+  const ip = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim()
+    || request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || "unknown";
+  const salt = Deno.env.get("ADMIN_API_TOKEN") || "sds-ask";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${ip}`));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function pagesBaseUrl() {
+  const repository = Deno.env.get("GITHUB_REPOSITORY") || "izzulwork1/sds-hub";
+  const [owner, name] = repository.split("/");
+  return `https://${owner}.github.io/${name}/`;
+}
+
+function askBytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return btoa(binary);
 }
 
 async function streamFile(id: string, variant: string, admin: boolean, cors: Record<string, string> | null) {
