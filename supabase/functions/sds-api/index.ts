@@ -197,7 +197,7 @@ async function uploadZip(file: File, cors: Record<string, string> | null, actor:
       }
       try {
         const bytes = await entry.getData(new Uint8ArrayWriter());
-        const document = await ingestPdf(filename.split(/[\\/]/).pop() || filename, bytes, actor, batchId, false);
+        const document = await ingestPdf(filename.split(/[\\/]/).pop() || filename, bytes, actor, batchId, true);
         accepted += 1;
         if (document?.possible_duplicate_flag) duplicates += 1;
         results.push({

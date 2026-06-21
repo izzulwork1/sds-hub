@@ -717,12 +717,16 @@ function renderUploadResults(rows) {
 
 async function openFile(variant) {
   if (!state.selectedId) return;
+  // Open the tab synchronously inside the click gesture; populating it after the fetch avoids the popup blocker.
+  const viewer = window.open("", "_blank");
   try {
     const token = await accessToken();
     const response = await fetch(`${state.apiUrl}/v1/admin/documents/${state.selectedId}/file?variant=${encodeURIComponent(variant)}`, { headers:{ Authorization:`Bearer ${token}` } });
     if (!response.ok) throw new Error("PDF could not be opened.");
-    const url = URL.createObjectURL(await response.blob()); window.open(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (error) { showToast(error.message); }
+    const url = URL.createObjectURL(await response.blob());
+    if (viewer) viewer.location = url; else window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  } catch (error) { if (viewer) viewer.close(); showToast(error.message); }
 }
 
 async function accessToken() {
