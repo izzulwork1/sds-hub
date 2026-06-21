@@ -256,7 +256,7 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
   const activeExistingDuplicate = candidates.find((item: Record<string, unknown>) => item.id === document.duplicate_of_id);
   const duplicateOfId = activeExistingDuplicate?.id || metadataDuplicate?.id || null;
   const merged = mergeExtraction(regex, gemini, { ocrRequired: assessment.weakText || Boolean(textError), duplicate: Boolean(duplicateOfId) });
-  if (geminiError) merged.review_required_reason = `${merged.review_required_reason}. Gemini fallback failed: ${geminiError}`;
+  if (geminiError) merged.review_required_reason = `${merged.review_required_reason}. ${friendlyExtractionNote(geminiError)}`;
   if (textError) merged.review_required_reason = `${merged.review_required_reason}. PDF text extraction failed: ${textError}`;
   if (sections.missing.length) merged.review_required_reason = `${merged.review_required_reason}. Incomplete SDS: missing section(s) ${sections.missing.join(", ")} of 16 (DOSH CLASS 2013)`;
   const method = gemini ? (assessment.weakText ? "pdf-text+gemini-ocr" : "pdf-text+regex+gemini") : "pdf-text+regex";
@@ -856,3 +856,8 @@ function cleanReviewer(value: unknown) { return String(value || "").replace(/[\r
 function cleanComment(value: unknown) { return String(value || "").replace(/[\r\t]+/g, " ").trim().slice(0, 2000) || null; }
 async function readJson(request: Request): Promise<Record<string, any>> { try { return await request.json(); } catch { return {}; } }
 function safeError(error: unknown) { return String((error as Error)?.message || error || "Unknown error").replace(/[\r\n\t]+/g, " ").slice(0, 500); }
+// Reviewer-facing wording for AI fallback failures. The raw provider error is still kept in sds_extraction_logs.
+function friendlyExtractionNote(geminiError: string) {
+  if (/\b429\b|quota|rate.?limit/i.test(geminiError)) return "AI OCR was temporarily unavailable (quota limit reached); please verify the fields manually.";
+  return "AI OCR fallback was unavailable; please verify the fields manually.";
+}

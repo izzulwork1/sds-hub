@@ -65,9 +65,9 @@
           <div class="view-heading"><div><p class="eyebrow">Intake</p><h1>SDS Upload</h1></div></div>
           <form id="uploadForm" class="panel upload-panel">
             <label class="file-drop" for="pdfInput">
-              <strong>Select one SDS PDF or a ZIP batch</strong>
-              <span>PDF: maximum 15 MB. ZIP: up to 100 PDFs and 20 MB in the current Edge runtime. Originals, hashes, and batch results are retained.</span>
-              <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf,application/zip,application/x-zip-compressed,.zip" required>
+              <strong>Select one or more SDS PDFs (or a ZIP batch)</strong>
+              <span>Pick several PDFs at once for a bulk upload. Each PDF: maximum 15 MB. ZIP: up to 100 PDFs and 20 MB in the current Edge runtime. Each file is processed independently; originals, hashes, and results are retained.</span>
+              <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf,application/zip,application/x-zip-compressed,.zip" multiple required>
             </label>
             <button id="uploadButton" class="primary-action" type="submit">Upload and extract</button>
           </form>

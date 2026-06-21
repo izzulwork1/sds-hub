@@ -487,34 +487,98 @@ async function loadDetail(documentId) {
   audit.append(timeline.children.length ? timeline : emptyState("No audit events.")); elements.detailContent.replaceChildren(node("div", { className:"detail-grid" }, [summary,audit]));
 }
 
-async function uploadDocument(event) {
-  event.preventDefault(); const file = elements.pdfInput.files[0]; if (!file) return showToast("Select a PDF or ZIP first.");
-  const isZip = /\.zip$/i.test(file.name); const form = new FormData(); form.append("file", file, file.name);
-  elements.uploadButton.disabled = true; elements.uploadButton.textContent = isZip ? "Processing ZIP batch..." : "Uploading and extracting...";
-  elements.uploadProgress.hidden = false; elements.uploadProgress.textContent = isZip ? "Uploading ZIP → extracting PDFs → processing intake records…" : "Uploading PDF → extracting SDS metadata…";
-  elements.uploadResult.hidden = true; elements.uploadResult.replaceChildren();
-  try {
-    const result = await api("/v1/admin/documents", { method:"POST", body:form });
-    elements.uploadProgress.textContent = "Completed"; elements.uploadResult.hidden = false;
-    if (result.batch) renderZipResult(result); else {
-      elements.uploadResult.textContent = `${result.document.original_filename} uploaded. Status: ${result.document.status}. Confidence: ${result.document.extraction_confidence || 0}%.`;
-      state.selectedId = result.document.id; elements.detailNav.disabled = false;
-    }
-    elements.uploadForm.reset();
-  } catch (error) { elements.uploadProgress.textContent = "Failed"; showToast(error.message); }
-  finally { elements.uploadButton.disabled = false; elements.uploadButton.textContent = "Upload and extract"; }
+const UPLOAD_LIMITS = { pdf: 15 * 1024 * 1024, zip: 20 * 1024 * 1024 };
+
+function classifyUpload(file) {
+  const name = String(file.name || "").trim();
+  const isZip = /\.zip$/i.test(name) || ["application/zip", "application/x-zip-compressed"].includes(file.type);
+  const isPdf = !isZip && (/\.pdf$/i.test(name) || file.type === "application/pdf");
+  return { name, isPdf, isZip };
 }
 
-function renderZipResult(result) {
-  const batch = result.batch; elements.uploadResult.append(node("strong", { textContent:`Batch ${batch.status}: ${batch.accepted_pdf_count} accepted, ${batch.duplicate_count} duplicate, ${batch.rejected_file_count} rejected, ${batch.failed_count} failed.` }));
+// Client-side gate so users get instant, specific feedback instead of a slow round-trip and a generic error.
+function validateUpload(file) {
+  const { name, isPdf, isZip } = classifyUpload(file);
+  if (!name) return "Skipped: the file has no readable name.";
+  if (!isPdf && !isZip) return "Skipped: only PDF or ZIP files are accepted.";
+  if (file.size === 0) return "Skipped: the file is empty (0 bytes).";
+  const mb = (file.size / 1048576).toFixed(1);
+  if (isPdf && file.size > UPLOAD_LIMITS.pdf) return `Skipped: PDF is ${mb} MB; the limit is 15 MB.`;
+  if (isZip && file.size > UPLOAD_LIMITS.zip) return `Skipped: ZIP is ${mb} MB; the Edge limit is 20 MB. Split the batch.`;
+  return null;
+}
+
+function docToResultRow(doc) {
+  return {
+    filename: doc.original_filename, status: doc.possible_duplicate_flag ? "duplicate" : "processed",
+    product_name: doc.product_name || doc.trade_name || null, manufacturer: doc.manufacturer || doc.supplier || null,
+    date_detected: doc.validity_date_value || null, date_basis_used: doc.validity_date_basis || null,
+    sections_complete: Array.isArray(doc.missing_sections) && doc.missing_sections.length === 0,
+    missing_sections: doc.missing_sections || [], reason: doc.ocr_required ? "Scanned/image-only PDF; OCR review required" : null
+  };
+}
+
+async function uploadDocument(event) {
+  event.preventDefault();
+  if (state.uploading) return;
+  const files = [...(elements.pdfInput.files || [])];
+  if (!files.length) return showToast("Select one or more PDF files, or a ZIP batch, first.");
+
+  // Validate and de-duplicate the selection before any network call; invalid files are reported, not silently dropped.
+  const rows = []; const queue = []; const seen = new Set();
+  for (const file of files) {
+    const invalid = validateUpload(file);
+    if (invalid) { rows.push({ filename: file.name || "unnamed", status: "rejected", reason: invalid }); continue; }
+    const key = `${file.name}::${file.size}`;
+    if (seen.has(key)) { rows.push({ filename: file.name, status: "rejected", reason: "Skipped: selected more than once in this batch." }); continue; }
+    seen.add(key); queue.push(file);
+  }
+  if (!queue.length) { renderUploadResults(rows); return showToast("No valid PDF or ZIP files to upload."); }
+
+  state.uploading = true;
+  elements.uploadButton.disabled = true; elements.pdfInput.disabled = true;
+  elements.uploadProgress.hidden = false; elements.uploadResult.hidden = true; elements.uploadResult.replaceChildren();
+
+  let lastDocId = "";
+  for (let index = 0; index < queue.length; index += 1) {
+    const file = queue[index]; const { isZip } = classifyUpload(file);
+    elements.uploadButton.textContent = `Processing ${index + 1} of ${queue.length}…`;
+    elements.uploadProgress.textContent = `Processing ${index + 1} of ${queue.length}: ${file.name} — ${isZip ? "expanding ZIP and extracting PDFs" : "uploading and extracting metadata"}…`;
+    try {
+      const form = new FormData(); form.append("file", file, file.name);
+      const result = await api("/v1/admin/documents", { method:"POST", body:form });
+      if (result.batch) { for (const item of (result.results || [])) rows.push(item); }
+      else if (result.document) { rows.push(docToResultRow(result.document)); lastDocId = result.document.id; }
+    } catch (error) {
+      rows.push({ filename: file.name, status: "failed", reason: error?.data?.detail || error?.message || "Upload failed." });
+    }
+  }
+
+  renderUploadResults(rows);
+  elements.uploadProgress.textContent = "Completed. Every accepted SDS is in Needs Review and awaits EHS approval.";
+  if (lastDocId) { state.selectedId = lastDocId; elements.detailNav.disabled = false; }
+  elements.uploadForm.reset();
+  state.uploading = false; elements.uploadButton.disabled = false; elements.pdfInput.disabled = false;
+  elements.uploadButton.textContent = "Upload and extract";
+}
+
+function renderUploadResults(rows) {
+  elements.uploadResult.hidden = false; elements.uploadResult.replaceChildren();
+  const tally = { processed:0, duplicate:0, rejected:0, failed:0 };
+  for (const item of rows) tally[item.status] = (tally[item.status] || 0) + 1;
+  elements.uploadResult.append(node("strong", { textContent:
+    `${rows.length} file(s): ${tally.processed} uploaded, ${tally.duplicate} possible duplicate, ${tally.rejected} skipped, ${tally.failed} failed. Every accepted SDS requires EHS review before publication.` }));
   const table = node("table", { className:"data-table upload-results-table" });
-  const head = node("thead"); head.append(node("tr", {}, ["Filename","Status","Product","Manufacturer","Date / basis","Sections","Reason"].map((title) => node("th", { textContent:title }))));
+  const head = node("thead"); head.append(node("tr", {}, ["File","Status","Product","Manufacturer","Date / basis","Sections","Notes"].map((title) => node("th", { textContent:title }))));
   const body = node("tbody");
-  for (const item of result.results || []) body.append(node("tr", {}, [
-    item.filename, item.status, item.product_name || "-", item.manufacturer || "-",
-    item.date_detected ? `${item.date_detected} / ${item.date_basis_used || "unknown"}` : "-",
-    item.sections_complete === true ? "16/16" : Array.isArray(item.missing_sections) ? `Missing ${item.missing_sections.join(", ")}` : "-", item.reason || "-"
-  ].map((value) => node("td", { textContent:String(value) }))));
+  for (const item of rows) {
+    const sections = item.sections_complete === true ? "16/16"
+      : Array.isArray(item.missing_sections) && item.missing_sections.length ? `Missing ${item.missing_sections.join(", ")}` : "-";
+    body.append(node("tr", { className:`upload-row upload-row-${item.status}` }, [
+      item.filename, item.status, item.product_name || "-", item.manufacturer || "-",
+      item.date_detected ? `${item.date_detected} / ${item.date_basis_used || "unknown"}` : "-", sections, item.reason || "-"
+    ].map((value) => node("td", { textContent:String(value) }))));
+  }
   table.append(head, body); elements.uploadResult.append(table);
 }
 
