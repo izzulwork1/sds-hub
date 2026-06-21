@@ -652,6 +652,37 @@ a {
   background: var(--slate-100);
 }
 
+.expiry-reminder {
+  display: block;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 11px 14px;
+  text-align: left;
+  color: #8a5a00;
+  background: var(--amber-100);
+  border: 1px solid var(--amber-500);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.expiry-reminder::before {
+  content: "\26A0";
+  margin-right: 8px;
+}
+
+.expiry-reminder:hover {
+  filter: brightness(0.97);
+}
+
+.expiry-reminder.is-active {
+  color: #5a3d00;
+  background: var(--amber-500);
+  border-color: #d99a1a;
+}
+
 .result-department {
   max-width: 125px;
   padding: 5px 8px;

@@ -1,4 +1,4 @@
-import { assessSdsText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction, shouldUseGemini } from "../_shared/extraction.ts";
+import { assessSdsText, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction, shouldUseGemini } from "../_shared/extraction.ts";
 import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
@@ -120,6 +120,9 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, revie
   let textResult = { text: "", pagesExtracted: 0, totalPages: 0 };
   let textError = "";
   try { textResult = await extractFirstTwoPages(bytes); } catch (error) { textError = safeError(error); }
+  let sectionScanText = textResult.text;
+  try { const allPages = await extractAllText(bytes); if (allPages.text) sectionScanText = allPages.text; } catch { /* fall back to first-page text */ }
+  const sections = detectSections(sectionScanText);
   const assessment = assessSdsText(textResult.text);
   const regex = extractWithRegex(textResult.text);
   const geminiKey = Deno.env.get("GEMINI_API_KEY") || "";
@@ -142,10 +145,13 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, revie
   const merged = mergeExtraction(regex, gemini, { ocrRequired: assessment.weakText || Boolean(textError), duplicate: Boolean(duplicateOfId) });
   if (geminiError) merged.review_required_reason = `${merged.review_required_reason}. Gemini fallback failed: ${geminiError}`;
   if (textError) merged.review_required_reason = `${merged.review_required_reason}. PDF text extraction failed: ${textError}`;
+  if (sections.missing.length) merged.review_required_reason = `${merged.review_required_reason}. Incomplete SDS: missing section(s) ${sections.missing.join(", ")} of 16 (DOSH CLASS 2013)`;
   const method = gemini ? (assessment.weakText ? "pdf-text+gemini-ocr" : "pdf-text+regex+gemini") : "pdf-text+regex";
 
   await updateRows("sds_documents", `id=eq.${id}`, {
     ...metadataColumns(merged),
+    sections_found: sections.found,
+    missing_sections: sections.missing,
     status: "Extracted",
     ocr_required: assessment.weakText || Boolean(textError),
     extraction_method: method,

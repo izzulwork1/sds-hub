@@ -29,6 +29,14 @@ const FIELD_DEFINITIONS = [
   ["review_required_reason","Review-required reason","long"]
 ];
 
+const SECTION_TITLES = {
+  1: "Identification", 2: "Hazard identification", 3: "Composition/ingredients", 4: "First-aid measures",
+  5: "Fire-fighting measures", 6: "Accidental release", 7: "Handling and storage", 8: "Exposure controls/PPE",
+  9: "Physical & chemical properties", 10: "Stability and reactivity", 11: "Toxicological information",
+  12: "Ecological information", 13: "Disposal considerations", 14: "Transport information",
+  15: "Regulatory information", 16: "Other information"
+};
+
 const state = {
   apiUrl: String(config.adminApiUrl || "").replace(/\/$/, ""),
   token: sessionStorage.getItem("sds-admin-token") || "",
@@ -178,7 +186,36 @@ function renderReviewForm(documentRecord) {
   ].filter(Boolean);
   elements.reviewWarnings.hidden = !warnings.length;
   elements.reviewWarnings.textContent = warnings.join("\n");
-  elements.reviewFields.replaceChildren(...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,documentRecord[field])));
+  elements.reviewFields.replaceChildren(
+    buildValiditySummary(documentRecord),
+    ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,documentRecord[field]))
+  );
+}
+
+function buildValiditySummary(documentRecord) {
+  const found = Array.isArray(documentRecord.sections_found) ? documentRecord.sections_found : [];
+  const missing = Array.isArray(documentRecord.missing_sections) ? documentRecord.missing_sections : [];
+  const missingText = missing.length
+    ? missing.map((section) => `${section} (${SECTION_TITLES[section] || "?"})`).join(", ")
+    : "None - all 16 present";
+  const card = node("div", { className:"field-wide review-summary" });
+  card.append(node("span", { className:"review-summary-title", textContent:"Validity & 16-section completeness" }));
+  const grid = node("div", { className:"review-summary-grid" });
+  grid.append(
+    summaryRow("Established date", documentRecord.established_date || "Not detected"),
+    summaryRow("Expiry (established + 5 years)", documentRecord.expiry_date || "Validity unknown - verify date", !documentRecord.expiry_date),
+    summaryRow("Sections found", `${found.length} of 16`, found.length < 16),
+    summaryRow("Missing sections", missingText, missing.length > 0)
+  );
+  card.append(grid);
+  return card;
+}
+
+function summaryRow(label, value, danger = false) {
+  return node("div", { className:`review-summary-row${danger ? " is-danger" : ""}` }, [
+    node("span", { className:"review-summary-label", textContent:label }),
+    node("span", { className:"review-summary-value", textContent:value })
+  ]);
 }
 
 function createField(field, labelText, type, value) {
@@ -327,8 +364,10 @@ async function loadDetail(documentId) {
   const summary = node("section", { className:"detail-card" });
   summary.append(node("h2", { textContent:displayName(documentRecord) }));
   const list = node("dl", { className:"definition-list" });
-  const fields = ["status","original_filename","approved_filename","product_name","trade_name","supplier","manufacturer","language","issue_date","revision_date","signal_word","extraction_confidence","extraction_method","ocr_required","possible_duplicate_flag","review_required_reason"];
+  const fields = ["status","original_filename","approved_filename","product_name","trade_name","supplier","manufacturer","language","issue_date","revision_date","established_date","expiry_date","signal_word","extraction_confidence","extraction_method","ocr_required","possible_duplicate_flag","review_required_reason"];
   for (const field of fields) list.append(node("dt", { textContent:field.replaceAll("_"," ") }), node("dd", { textContent:String(documentRecord[field] ?? "-") }));
+  const missingSections = Array.isArray(documentRecord.missing_sections) ? documentRecord.missing_sections : [];
+  list.append(node("dt", { textContent:"missing sections" }), node("dd", { textContent: missingSections.length ? missingSections.join(", ") : "None - all 16 present" }));
   summary.append(list);
   const audit = node("section", { className:"detail-card" });
   audit.append(node("h2", { textContent:"Review history" }));

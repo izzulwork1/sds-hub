@@ -142,9 +142,9 @@ export function getExpiryDate(documentRecord) {
   return addYears(documentRecord?.revisionDate, SDS_VALIDITY_YEARS);
 }
 
-// Validity state for display: "valid", "expiring" (within warnDays), "expired",
-// or "unknown" when no usable date exists (never guessed).
-export function validityStatus(documentRecord, now = new Date(), warnDays = 180) {
+// Validity state for display: "valid", "expiring" (within warnDays, default 2
+// months), "expired", or "unknown" when no usable date exists (never guessed).
+export function validityStatus(documentRecord, now = new Date(), warnDays = 60) {
   const expiryDate = getExpiryDate(documentRecord);
   if (!expiryDate) return { state: "unknown", expiryDate: "" };
   const expiryMs = Date.parse(`${expiryDate}T00:00:00Z`);

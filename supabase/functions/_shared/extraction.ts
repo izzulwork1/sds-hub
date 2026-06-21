@@ -54,6 +54,66 @@ export async function extractFirstTwoPages(pdfBytes: Uint8Array) {
   return { text: pageTexts.join("\n\n--- PAGE BREAK ---\n\n").trim(), pagesExtracted: pageCount, totalPages };
 }
 
+// Read text from across the document (sections 9-16 fall on later pages) so the
+// 16-section completeness check can see all headers. Capped to keep parsing bounded.
+export async function extractAllText(pdfBytes: Uint8Array, maxPages = 24) {
+  const pdf = await getDocumentProxy(pdfBytes);
+  const pageCount = Math.min(maxPages, pdf.numPages);
+  const pageTexts: string[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      pageTexts.push(content.items.map((item) => ("str" in item && typeof item.str === "string" ? item.str : "")).join(" "));
+      page.cleanup();
+    }
+  } finally {
+    await pdf.destroy();
+  }
+  return { text: pageTexts.join("\n").trim(), pagesExtracted: pageCount, totalPages: pdf.numPages };
+}
+
+// The 16 mandatory SDS section headers under DOSH Malaysia CLASS Regulations 2013,
+// matched in English and Bahasa Malaysia. A document missing any section is flagged
+// incomplete during EHS review.
+export const SDS_SECTION_TITLES: Record<number, string> = {
+  1: "Identification", 2: "Hazard identification", 3: "Composition / ingredients",
+  4: "First-aid measures", 5: "Fire-fighting measures", 6: "Accidental release measures",
+  7: "Handling and storage", 8: "Exposure controls / personal protection",
+  9: "Physical and chemical properties", 10: "Stability and reactivity",
+  11: "Toxicological information", 12: "Ecological information", 13: "Disposal considerations",
+  14: "Transport information", 15: "Regulatory information", 16: "Other information"
+};
+
+const SDS_SECTION_KEYWORDS: Record<number, string[]> = {
+  1: ["identification of the hazardous chemical", "identification of the substance", "identification", "pengenalan bahan kimia", "pengenalan"],
+  2: ["hazard identification", "hazards identification", "pengenalan bahaya"],
+  3: ["composition", "information on ingredients", "information of the ingredients", "komposisi", "ramuan"],
+  4: ["first-aid", "first aid", "pertolongan cemas"],
+  5: ["fire-fighting", "fire fighting", "firefighting", "pemadaman kebakaran"],
+  6: ["accidental release", "pelepasan tidak sengaja", "pelepasan secara tidak sengaja"],
+  7: ["handling and storage", "pengendalian dan penyimpanan"],
+  8: ["exposure control", "personal protection", "kawalan pendedahan", "perlindungan diri"],
+  9: ["physical and chemical properties", "physical & chemical properties", "sifat fizikal dan kimia"],
+  10: ["stability and reactivity", "kestabilan dan kereaktifan"],
+  11: ["toxicological", "toksikologi"],
+  12: ["ecological", "ekologi"],
+  13: ["disposal", "pelupusan"],
+  14: ["transport", "pengangkutan"],
+  15: ["regulatory", "pengawalseliaan", "pengawalan"],
+  16: ["other information", "maklumat lain", "maklumat tambahan"]
+};
+
+export function detectSections(text: string) {
+  const normalized = String(text || "").toLowerCase().replace(/\s+/g, " ");
+  const found: number[] = [];
+  const missing: number[] = [];
+  for (let section = 1; section <= 16; section += 1) {
+    (SDS_SECTION_KEYWORDS[section].some((keyword) => normalized.includes(keyword)) ? found : missing).push(section);
+  }
+  return { found, missing };
+}
+
 export function assessSdsText(text: string) {
   const normalized = String(text || "").toLowerCase();
   const keywordHits = SDS_KEYWORDS.filter((keyword) => normalized.includes(keyword));

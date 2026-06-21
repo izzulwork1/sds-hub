@@ -42,6 +42,7 @@ const elements = {
   resetFilters: document.querySelector("#resetFilters"),
   departmentFilters: document.querySelector("#departmentFilters"),
   languageFilters: document.querySelector("#languageFilters"),
+  expiryReminder: document.querySelector("#expiryReminder"),
   resultsCount: document.querySelector("#resultsCount"),
   resultsList: document.querySelector("#resultsList"),
   loadingState: document.querySelector("#loadingState"),
@@ -84,6 +85,7 @@ const state = {
   query: "",
   department: "All",
   language: "All",
+  expiringOnly: false,
   selectedId: "",
   updatedAt: "",
   loaded: false,
@@ -163,6 +165,7 @@ async function loadCatalog() {
     applyRoute();
     renderDepartmentFilters();
     renderLanguageFilters();
+    renderExpiryReminder();
     renderCatalog();
     updateCatalogTimestamp();
     await pruneOfflineDocuments();
@@ -260,10 +263,28 @@ function selectLanguage(language) {
   renderCatalog();
 }
 
+function renderExpiryReminder() {
+  const element = elements.expiryReminder;
+  if (!element) return;
+  const count = state.catalog.filter((documentRecord) => validityStatus(documentRecord).state === "expiring").length;
+  if (count === 0) {
+    state.expiringOnly = false;
+    element.hidden = true;
+    return;
+  }
+  element.hidden = false;
+  element.setAttribute("aria-pressed", String(state.expiringOnly));
+  element.classList.toggle("is-active", state.expiringOnly);
+  element.textContent = state.expiringOnly
+    ? `Showing ${count} SDS expiring within 2 months - tap to show all documents`
+    : `${count} SDS expiring within 2 months - tap to view the list`;
+}
+
 function renderCatalog() {
   if (!state.loaded) return;
 
-  const matches = filterCatalog(state.catalog, state.query, state.department, state.language);
+  let matches = filterCatalog(state.catalog, state.query, state.department, state.language);
+  if (state.expiringOnly) matches = matches.filter((document) => validityStatus(document).state === "expiring");
   elements.resultsList.replaceChildren();
   elements.noResultsState.hidden = matches.length > 0 || state.catalog.length === 0;
   elements.resultsList.hidden = matches.length === 0 || state.catalog.length === 0;
@@ -349,7 +370,7 @@ function selectDepartment(department) {
 }
 
 function updateResetButton() {
-  elements.resetFilters.hidden = state.department === "All" && state.language === "All" && !state.query;
+  elements.resetFilters.hidden = state.department === "All" && state.language === "All" && !state.query && !state.expiringOnly;
 }
 
 function selectDocumentById(documentId, options) {
@@ -714,10 +735,12 @@ function bindEvents() {
     state.query = "";
     state.department = "All";
     state.language = "All";
+    state.expiringOnly = false;
     elements.searchInput.value = "";
     elements.clearSearch.hidden = true;
     renderDepartmentFilters();
     renderLanguageFilters();
+    renderExpiryReminder();
     updateUrl({ replace: true });
     renderCatalog();
   });
@@ -731,6 +754,15 @@ function bindEvents() {
     elements.languageFilters.addEventListener("click", (event) => {
       const button = event.target.closest(".filter-button");
       if (button) selectLanguage(button.dataset.language);
+    });
+  }
+
+  if (elements.expiryReminder) {
+    elements.expiryReminder.addEventListener("click", () => {
+      state.expiringOnly = !state.expiringOnly;
+      updateResetButton();
+      renderExpiryReminder();
+      renderCatalog();
     });
   }
 
