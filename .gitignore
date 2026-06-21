@@ -15,3 +15,8 @@ data/bulk-review-queue.json
 data/bulk-ai-verification-log.json
 data/bulk-scan-summary.json
 data/.bulk-prescreen-cache.json
+.env
+.env.local
+.env.production
+*.log
+.DS_Store

@@ -739,7 +739,7 @@ async function hashClientIp(request: Request) {
 }
 
 function pagesBaseUrl() {
-  const repository = Deno.env.get("GITHUB_REPOSITORY") || "izzulwork1/sds-hub";
+  const repository = Deno.env.get("GITHUB_REPOSITORY") || "tamco-ehs/sds-hub";
   const [owner, name] = repository.split("/");
   return `https://${owner}.github.io/${name}/`;
 }

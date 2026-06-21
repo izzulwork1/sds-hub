@@ -5,7 +5,7 @@ type StoredAsset = { assetId: number; assetName: string; apiUrl: string; downloa
 
 function config() {
   const token = Deno.env.get("GITHUB_TOKEN") || "";
-  const repository = Deno.env.get("GITHUB_REPOSITORY") || "izzulwork1/sds-hub";
+  const repository = Deno.env.get("GITHUB_REPOSITORY") || "tamco-ehs/sds-hub";
   if (!token) throw new Error("GitHub storage is not configured");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("GitHub repository configuration is invalid");
   return { token, repository };
@@ -67,7 +67,7 @@ async function uploadAsset(releaseId: number, name: string, label: string, bytes
   const response = await fetch(`${GITHUB_UPLOAD}/repos/${repository}/releases/${releaseId}/assets?${query}`, {
     method: "POST",
     headers: { ...githubHeaders(token, "application/vnd.github+json"), "Content-Type": "application/pdf" },
-    body: bytes
+    body: bytes as BodyInit
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`GitHub asset upload failed (${response.status}): ${String(payload?.message || "unknown error").slice(0, 200)}`);
