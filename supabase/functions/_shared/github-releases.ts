@@ -22,6 +22,15 @@ export async function uploadApproved(documentId: string, approvedFilename: strin
   return uploadAsset(release.id, approvedFilename, `Approved SDS ${documentId}`, bytes);
 }
 
+export async function deleteReleaseAsset(assetId: number) {
+  const { token, repository } = config();
+  const response = await fetch(`${GITHUB_API}/repos/${repository}/releases/assets/${assetId}`, {
+    method: "DELETE",
+    headers: githubHeaders(token, "application/vnd.github+json")
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`GitHub asset delete failed (${response.status})`);
+}
+
 export async function downloadPrivateAsset(assetId: number) {
   const { token, repository } = config();
   const response = await fetch(`${GITHUB_API}/repos/${repository}/releases/assets/${assetId}`, {

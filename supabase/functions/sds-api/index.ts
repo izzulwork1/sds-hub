@@ -1,7 +1,7 @@
 import { assessSdsText, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction, shouldUseGemini } from "../_shared/extraction.ts";
 import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
-import { insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
-import { downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
+import { deleteRows, insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
+import { deleteReleaseAsset, downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
 import { computeValidity } from "../_shared/validity.ts";
 import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.57";
@@ -72,7 +72,7 @@ async function route(request: Request) {
   if (path === "/v1/admin/dashboard" && request.method === "GET") return dashboard(cors);
   if (path === "/v1/admin/duplicates" && request.method === "GET") return duplicateList(cors);
 
-  const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore)$/i);
+  const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore|purge)$/i);
   if (bulkMatch && request.method === "POST") return bulkAction(bulkMatch[1].toLowerCase(), request, cors, requireRole(actor, "EHS_ADMIN"));
 
   const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|archive|restore|file))?$/i);
@@ -360,9 +360,24 @@ async function approve(id: string, request: Request, cors: Record<string, string
   const dateChanged = JSON.stringify(dateBefore) !== JSON.stringify(dateAfter);
   if (dateChanged && !cleanComment(body.comment)) return json({ error: "A reason/comment is required for date correction." }, 400, cors);
   if (metadata.validity_date_basis === "print_date" && !body.confirmPrintDate) return json({ error: "Print date is the only validity basis. EHS confirmation is required before approval.", requires_print_date_confirmation: true }, 409, cors);
-  const filename = generateApprovedFilename(metadata as unknown as Record<string, unknown>);
-  const collisions = await selectRows("sds_documents", `select=id,product_name&approved_filename=eq.${encodeURIComponent(filename)}&status=eq.Approved&id=neq.${id}&limit=1`);
-  if (collisions.length) return json({ error: "Approved filename already exists. Change the metadata or mark this document as a duplicate; existing approved files are never overwritten.", conflict: collisions[0], proposed_filename: filename }, 409, cors);
+  const baseFilename = generateApprovedFilename(metadata as unknown as Record<string, unknown>);
+  let filename = baseFilename;
+  const collisions = await selectRows("sds_documents", `select=id,product_name,trade_name,revision_date,file_sha256,approved_filename,approved_download_url&approved_filename=eq.${encodeURIComponent(baseFilename)}&status=eq.Approved&id=neq.${id}&limit=5`);
+  if (collisions.length) {
+    const identical = collisions.find((row: Record<string, unknown>) => row.file_sha256 && row.file_sha256 === existing.file_sha256) as Record<string, unknown> | undefined;
+    // An exact byte-identical SDS is already approved: never create a second approved copy. Surface a clear choice to EHS.
+    if (identical && !body.confirmNewRevision) {
+      return json({
+        error: "This SDS appears to already exist. You can use the existing approved SDS, mark this as duplicate, or upload it as a new revision.",
+        code: "DUPLICATE_APPROVED",
+        duplicate_kind: "identical",
+        existing: { id: identical.id, product_name: identical.product_name || identical.trade_name || "Approved SDS", revision_date: identical.revision_date || null, approved_filename: identical.approved_filename || null, pdf_url: identical.approved_download_url || null },
+        proposed_filename: baseFilename
+      }, 409, cors);
+    }
+    // Same controlled name but different content (or an explicit new revision): assign a unique, safe filename. Existing approved files are never overwritten.
+    filename = await uniqueApprovedFilename(baseFilename, id);
+  }
   const bytes = await downloadPrivateAsset(Number(existing.original_asset_id));
   const asset = await uploadApproved(id, filename, bytes);
   const approvedAt = nowIso();
@@ -383,6 +398,17 @@ async function approve(id: string, request: Request, cors: Record<string, string
   await auditEvent(actor, "APPROVE", approved, body.comment, existing, approved);
   if (dateChanged) await auditEvent(actor, "DATE_CORRECTION", approved, body.comment, dateBefore, dateAuditSnapshot(approved || {}));
   return json({ document: approved, approved_filename: filename }, 200, cors);
+}
+
+// Never overwrite an existing approved asset: derive the next free "..._r2.pdf", "..._r3.pdf" name.
+async function uniqueApprovedFilename(base: string, selfId: string) {
+  const stem = base.replace(/\.pdf$/i, "");
+  for (let suffix = 2; suffix <= 50; suffix += 1) {
+    const candidate = `${stem}_r${suffix}.pdf`;
+    const taken = await selectRows("sds_documents", `select=id&approved_filename=eq.${encodeURIComponent(candidate)}&status=eq.Approved&id=neq.${selfId}&limit=1`);
+    if (!taken.length) return candidate;
+  }
+  return `${stem}_${Date.now()}.pdf`;
 }
 
 async function changeStatus(id: string, target: string, action: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
@@ -421,7 +447,7 @@ async function bulkAction(action: string, request: Request, cors: Record<string,
   const body = await readJson(request);
   const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(String).filter((id) => UUID_PATTERN.test(id)))].slice(0, 200);
   const reason = cleanComment(body.reason);
-  const expected = action === "archive" ? "ARCHIVE" : action === "delete" ? "DELETE" : "RESTORE";
+  const expected = action === "archive" ? "ARCHIVE" : action === "delete" ? "DELETE" : action === "restore" ? "RESTORE" : "PURGE";
   if (!ids.length) return json({ error: "Select at least one valid SDS record." }, 400, cors);
   if (String(body.confirmation || "").trim() !== expected) return json({ error: `Type ${expected} to confirm this bulk action.` }, 400, cors);
   if (!reason) return json({ error: "A reason/comment is required." }, 400, cors);
@@ -432,6 +458,17 @@ async function bulkAction(action: string, request: Request, cors: Record<string,
     try {
       const existing = await fetchDocument(id);
       if (!existing) { skipped += 1; results.push({ id, status: "skipped", reason: "Document not found" }); continue; }
+      if (action === "purge") {
+        // Permanent removal, no soft-delete: clear inbound duplicate references, delete stored assets, then hard-delete the row.
+        await updateRows("sds_documents", `duplicate_of_id=eq.${id}`, { duplicate_of_id: null }, false).catch(() => {});
+        await deleteReleaseAssetSafe(existing.original_asset_id);
+        await deleteReleaseAssetSafe(existing.approved_asset_id);
+        await auditEvent(actor, "PURGE", existing, reason, existing, null);
+        await deleteRows("sds_documents", `id=eq.${id}`);
+        succeeded += 1;
+        results.push({ id, product_name: existing.product_name || existing.trade_name || null, status: "success" });
+        continue;
+      }
       if (action === "archive" && (existing.archived_at || existing.deleted_at)) { skipped += 1; results.push({ id, status: "skipped", reason: existing.deleted_at ? "Document is deleted" : "Already archived" }); continue; }
       if (action === "delete" && existing.deleted_at) { skipped += 1; results.push({ id, status: "skipped", reason: "Already deleted" }); continue; }
       if (action === "restore" && !existing.deleted_at && !existing.archived_at) { skipped += 1; results.push({ id, status: "skipped", reason: "Document is already active" }); continue; }
@@ -453,8 +490,15 @@ async function bulkAction(action: string, request: Request, cors: Record<string,
       results.push({ id, status: "failed", reason: safeError(error) });
     }
   }
-  await auditEvent(actor, action === "archive" ? "BULK_ARCHIVE" : action === "delete" ? "BULK_DELETE" : "RESTORE", null, reason, null, { ids, succeeded, skipped, failed });
+  await auditEvent(actor, action === "purge" ? "BULK_PURGE" : action === "archive" ? "BULK_ARCHIVE" : action === "delete" ? "BULK_DELETE" : "RESTORE", null, reason, null, { ids, succeeded, skipped, failed });
   return json({ total_selected: ids.length, succeeded, skipped, failed, results }, 200, cors);
+}
+
+// Best-effort removal of a stored GitHub release asset; a missing/forbidden asset must not block the purge.
+async function deleteReleaseAssetSafe(assetId: unknown) {
+  const id = Number(assetId);
+  if (!id) return;
+  try { await deleteReleaseAsset(id); } catch (error) { console.warn("Release asset delete skipped:", safeError(error)); }
 }
 
 async function restoreDocument(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {

@@ -33,8 +33,11 @@ The existing reviewed GitHub Pages catalog remains the emergency-safe fallback i
 ## Enable Auth and create the first administrator
 
 1. Enable Email/Password in Supabase **Authentication > Providers**.
-2. Invite the first user in **Authentication > Users** and redirect to `https://izzulwork1.github.io/sds-hub/admin.html`. The invite flow opens a required password-creation dialog before the workspace.
-3. Apply migrations, then add that Auth UUID in the SQL editor:
+2. In **Authentication > URL Configuration > Redirect URLs**, add BOTH of these. The forgot-password and invite flows silently fail to redirect otherwise:
+   - `https://izzulwork1.github.io/sds-hub/admin.html`
+   - `https://izzulwork1.github.io/sds-hub/reset-password.html`
+3. Invite the first user in **Authentication > Users** and redirect to `https://izzulwork1.github.io/sds-hub/admin.html`. The invite flow opens a required password-creation dialog before the workspace.
+4. Apply migrations, then add that Auth UUID in the SQL editor:
 
 ```sql
 insert into public.admin_users (id, display_name, role, is_active)

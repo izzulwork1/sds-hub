@@ -21,6 +21,12 @@ export async function updateRows(table: string, query: string, changes: Record<s
   });
 }
 
+// Permanent delete. A query filter is required so a missing filter can never wipe the table.
+export async function deleteRows(table: string, query: string) {
+  if (!query) throw new Error("deleteRows requires a filter");
+  return request(`${table}?${query}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+}
+
 async function request(path: string, init: RequestInit & { headers?: Record<string, string> }) {
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) throw new Error("Supabase service configuration is unavailable");
   const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {

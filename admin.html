@@ -50,7 +50,9 @@
           <label>Email<input id="emailInput" type="email" autocomplete="username" required placeholder="ehs@example.com"></label>
           <label>Password<input id="passwordInput" type="password" autocomplete="current-password" required></label>
           <button id="loginButton" class="primary-action" type="submit">Login</button>
+          <button id="forgotPasswordButton" class="link-button" type="button">Forgot password?</button>
           <p id="loginError" class="login-error" role="alert" hidden></p>
+          <p id="loginNotice" class="login-notice" role="status" hidden></p>
         </form>
       </section>
 
@@ -63,6 +65,12 @@
 
         <section class="admin-view" data-view-panel="upload" hidden>
           <div class="view-heading"><div><p class="eyebrow">Intake</p><h1>SDS Upload</h1></div></div>
+          <ol id="uploadStepper" class="upload-stepper" aria-label="Upload steps">
+            <li class="step is-active" data-step="select"><span class="step-num">1</span><span class="step-label">Select SDS file(s)</span></li>
+            <li class="step" data-step="extract"><span class="step-num">2</span><span class="step-label">Auto extract</span></li>
+            <li class="step" data-step="review"><span class="step-num">3</span><span class="step-label">EHS review</span></li>
+            <li class="step" data-step="done"><span class="step-num">4</span><span class="step-label">Result</span></li>
+          </ol>
           <form id="uploadForm" class="panel upload-panel">
             <label class="file-drop" for="pdfInput">
               <strong>Select one or more SDS PDFs (or a ZIP batch)</strong>
@@ -111,6 +119,7 @@
               <strong id="selectedCount">0 selected</strong>
               <button id="bulkArchiveButton" class="secondary-action" type="button">Bulk archive</button>
               <button id="bulkDeleteButton" class="danger-action" type="button">Bulk delete</button>
+              <button id="bulkPurgeButton" class="danger-action" type="button">Permanently delete</button>
               <button id="bulkRestoreButton" class="secondary-action" type="button">Restore selected</button>
             </div>
             <div id="masterTable"></div>
@@ -150,6 +159,19 @@
       <p id="passwordError" class="login-error" role="alert" hidden></p>
       <div class="action-row"><button id="passwordCancelButton" class="secondary-action" type="button">Cancel</button><button id="passwordSaveButton" class="primary-action" type="submit">Save password</button></div>
     </form>
+  </dialog>
+
+  <dialog id="duplicateDialog" class="confirmation-dialog">
+    <div class="dialog-body">
+      <h2>This SDS may already exist</h2>
+      <p id="duplicateMessage"></p>
+      <div id="duplicateExisting" class="duplicate-existing"></div>
+      <div class="action-row">
+        <button id="duplicateCancelButton" class="secondary-action" type="button">Cancel</button>
+        <button id="duplicateMarkButton" class="secondary-action" type="button">Mark as duplicate</button>
+        <button id="duplicateRevisionButton" class="primary-action" type="button">Upload as new revision</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="adminToast" class="admin-toast" role="status" aria-live="polite" hidden></div>

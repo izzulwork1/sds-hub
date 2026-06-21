@@ -18,3 +18,67 @@
 .upload-row-duplicate td:nth-child(2){color:#704c00}
 .upload-row-rejected td:nth-child(2),.upload-row-failed td:nth-child(2){color:var(--red)}
 .upload-row-rejected,.upload-row-failed{background:var(--red-pale)}
+
+/* ===== Modernization layer (2026-06): refreshed visual system + new components ===== */
+:root{
+  --radius:16px; --radius-sm:10px;
+  --canvas:#eef2f7; --surface:#ffffff; --line:#e2e8f0; --muted:#5b6b7c; --blue:#1466b8; --blue-pale:#eef6fd;
+  --shadow-sm:0 1px 2px #0b1f3308,0 2px 6px #0b1f330a; --shadow-md:0 6px 20px #0b1f3314; --shadow-lg:0 18px 48px #0b1f3322;
+}
+body{background:var(--canvas)}
+.admin-main{padding:34px 34px 56px}
+.view-heading h1{color:var(--navy-950)}
+
+/* Buttons — smoother, clearer hierarchy */
+.primary-action,.secondary-action,.danger-action{border-radius:10px;font-weight:750;letter-spacing:.01em;transition:background .15s,box-shadow .15s,border-color .15s,transform .05s}
+.primary-action:hover{box-shadow:var(--shadow-sm)}
+.primary-action:active,.secondary-action:active,.danger-action:active{transform:translateY(1px)}
+.secondary-action{border-color:#cdd9e3}
+
+/* Panels, cards, tables — softer and roomier */
+.panel{padding:24px;border-radius:var(--radius);box-shadow:var(--shadow-sm);border-color:var(--line)}
+.metric-card{padding:18px;border-radius:14px;box-shadow:var(--shadow-sm);transition:box-shadow .15s}
+.metric-card:hover{box-shadow:var(--shadow-md)}
+.metric-card strong{color:var(--blue)}
+.data-table th{background:#f4f7fb;color:#516170}
+.data-table tbody tr:hover{background:#f7fafd}
+.data-table td{padding:11px 10px}
+
+/* Login & reset — centered and focused */
+.login-panel{grid-template-columns:1fr;max-width:440px;margin:6px auto 24px;padding:30px;border-radius:18px;box-shadow:var(--shadow-lg)}
+.login-panel h1{font-size:1.3rem}
+.connection-fields{grid-template-columns:1fr;gap:13px}
+.connection-fields input{padding:11px 12px}
+.reset-main{display:flex;justify-content:center;padding-top:46px}
+.reset-panel{margin:0}
+.link-button{justify-self:start;padding:2px 0;color:var(--blue);background:none;border:0;font-size:.78rem;font-weight:700;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.link-button:hover{color:#0c4f93}
+.login-notice{grid-column:1/-1;margin:0!important;padding:9px 11px;color:#0b4f8a!important;background:var(--blue-pale);border:1px solid #bfdcf3;border-radius:8px;font-size:.78rem}
+
+/* Upload stepper */
+.upload-stepper{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;padding:0;list-style:none}
+.upload-stepper .step{flex:1;min-width:140px;display:flex;align-items:center;gap:9px;padding:11px 13px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:12px;font-size:.76rem;font-weight:700;box-shadow:var(--shadow-sm)}
+.upload-stepper .step-num{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex:none;color:#fff;background:#aebccb;border-radius:50%;font-size:.74rem}
+.upload-stepper .step.is-active{color:var(--navy-900);border-color:var(--blue);box-shadow:0 0 0 3px #1466b81f}
+.upload-stepper .step.is-active .step-num{background:var(--blue)}
+.upload-stepper .step.is-done{color:var(--green)}
+.upload-stepper .step.is-done .step-num{background:var(--green)}
+
+/* Duplicate dialog */
+.dialog-body{display:grid;gap:14px;padding:22px}
+.dialog-body h2{margin:0;color:var(--navy-900);font-size:1.05rem}
+.dialog-body p{margin:0;color:var(--ink);font-size:.84rem}
+.duplicate-existing{display:grid;gap:7px;padding:13px;background:var(--amber-pale);border:1px solid #ecd087;border-radius:10px}
+.duplicate-existing-row{display:flex;justify-content:space-between;gap:12px;font-size:.78rem}
+.duplicate-existing-label{color:var(--muted);font-weight:750}
+.duplicate-existing .secondary-action{justify-self:start;margin-top:4px;text-decoration:none}
+
+/* Progress feedback with spinner while busy */
+.upload-progress{display:flex;align-items:center;gap:10px;border-radius:10px}
+.upload-progress.is-busy::before{content:"";width:15px;height:15px;flex:none;border:2px solid #9ec3e6;border-top-color:var(--blue);border-radius:50%;animation:sds-spin .8s linear infinite}
+@keyframes sds-spin{to{transform:rotate(360deg)}}
+
+@media(max-width:650px){
+  .admin-main{padding:16px 12px 40px}
+  .upload-stepper .step{min-width:0;flex:1 1 46%}
+}

@@ -40,14 +40,15 @@ const state = {
 };
 
 const elementIds = [
-  "connectionBadge","connectionPanel","workspace","adminSidebar","loginForm","emailInput","passwordInput","loginButton","loginError","logoutButton",
+  "connectionBadge","connectionPanel","workspace","adminSidebar","loginForm","emailInput","passwordInput","loginButton","loginError","loginNotice","forgotPasswordButton","logoutButton",
   "changePasswordButton","passwordDialog","passwordForm","passwordDialogTitle","newPasswordInput","confirmPasswordInput","passwordError","passwordCancelButton","passwordSaveButton",
-  "dashboardCards","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","queueTable","reviewList",
+  "dashboardCards","recentTable","uploadForm","pdfInput","uploadButton","uploadProgress","uploadResult","uploadStepper","queueTable","reviewList",
   "reviewForm","reviewStatus","reviewTitle","reviewOriginal","reviewWarnings","reviewFields","reviewComment",
   "openOriginalButton","saveReviewButton","reextractButton","duplicateButton","archiveButton","rejectButton","approveButton",
   "masterSearch","masterStatus","masterScope","masterSearchButton","masterTable","bulkToolbar","selectAllButton","clearSelectionButton",
-  "selectedCount","bulkArchiveButton","bulkDeleteButton","bulkRestoreButton","bulkResult","bulkDialog","bulkForm","bulkDialogTitle",
-  "bulkDialogMessage","bulkReason","bulkConfirmation","bulkCancelButton","bulkConfirmButton","duplicateTable","detailContent","detailNav","adminToast"
+  "selectedCount","bulkArchiveButton","bulkDeleteButton","bulkPurgeButton","bulkRestoreButton","bulkResult","bulkDialog","bulkForm","bulkDialogTitle",
+  "bulkDialogMessage","bulkReason","bulkConfirmation","bulkCancelButton","bulkConfirmButton","duplicateTable","detailContent","detailNav","adminToast",
+  "duplicateDialog","duplicateMessage","duplicateExisting","duplicateCancelButton","duplicateMarkButton","duplicateRevisionButton"
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 let toastTimer;
@@ -84,7 +85,11 @@ function bindEvents() {
   elements.changePasswordButton.addEventListener("click", () => showPasswordDialog(false));
   elements.passwordCancelButton.addEventListener("click", () => elements.passwordDialog.close());
   elements.passwordForm.addEventListener("submit", handleAsync(savePassword));
+  elements.forgotPasswordButton.addEventListener("click", handleAsync(forgotPassword));
   elements.uploadForm.addEventListener("submit", uploadDocument);
+  elements.duplicateCancelButton.addEventListener("click", () => elements.duplicateDialog.close());
+  elements.duplicateMarkButton.addEventListener("click", handleAsync(confirmDuplicateAsDuplicate));
+  elements.duplicateRevisionButton.addEventListener("click", handleAsync(confirmUploadAsNewRevision));
   elements.masterSearchButton.addEventListener("click", handleAsync(loadMaster));
   elements.masterScope.addEventListener("change", handleAsync(loadMaster));
   elements.openOriginalButton.addEventListener("click", () => openFile("original"));
@@ -98,6 +103,7 @@ function bindEvents() {
   elements.clearSelectionButton.addEventListener("click", clearSelection);
   elements.bulkArchiveButton.addEventListener("click", () => openBulkDialog("archive"));
   elements.bulkDeleteButton.addEventListener("click", () => openBulkDialog("delete"));
+  elements.bulkPurgeButton.addEventListener("click", () => openBulkDialog("purge"));
   elements.bulkRestoreButton.addEventListener("click", () => openBulkDialog("restore"));
   elements.bulkCancelButton.addEventListener("click", () => elements.bulkDialog.close());
   elements.bulkForm.addEventListener("submit", handleAsync(submitBulkAction));
@@ -202,9 +208,26 @@ async function savePassword(event) {
 
 function showPasswordError(message) { elements.passwordError.textContent = message; elements.passwordError.hidden = false; }
 
-function showLoginError(message) { elements.loginError.textContent = message; elements.loginError.hidden = false; }
+function showLoginError(message) { if (elements.loginNotice) elements.loginNotice.hidden = true; elements.loginError.textContent = message; elements.loginError.hidden = false; }
 function hideLoginError() { elements.loginError.hidden = true; elements.loginError.textContent = ""; }
+function showLoginNotice(message) { elements.loginError.hidden = true; elements.loginNotice.textContent = message; elements.loginNotice.hidden = false; }
 function isAdmin() { return state.profile?.role === "EHS_ADMIN"; }
+
+// Supabase emails a recovery link to reset-password.html. The message is identical whether or not the email exists.
+async function forgotPassword() {
+  const email = elements.emailInput.value.trim();
+  if (!email) return showLoginError("Enter your email above, then choose “Forgot password?”.");
+  elements.forgotPasswordButton.disabled = true;
+  try {
+    const redirectTo = new URL("reset-password.html", location.href).href;
+    await state.supabase.auth.resetPasswordForEmail(email, { redirectTo });
+  } catch (error) {
+    console.warn("Password reset request failed:", error?.message || error);
+  } finally {
+    elements.forgotPasswordButton.disabled = false;
+  }
+  showLoginNotice("If that email is registered, a password reset link is on its way. Check your inbox and spam folder.");
+}
 
 async function showView(view) {
   if (!state.profile || (view === "upload" && !isAdmin()) || (view === "detail" && !state.selectedId)) return;
@@ -343,19 +366,53 @@ async function saveReview() {
 }
 
 async function approve() {
-  if (!isAdmin() || !confirm("Approve this metadata and create the controlled filename?")) return;
-  const payload = { metadata:collectReviewMetadata(), comment:elements.reviewComment.value };
+  if (!isAdmin()) return;
+  await runApprove({ metadata:collectReviewMetadata(), comment:elements.reviewComment.value });
+}
+
+async function runApprove(payload) {
+  elements.approveButton.disabled = true;
   try {
     const data = await api(`/v1/admin/documents/${state.selectedId}/approve`, { method:"POST", body:payload });
     await finishApproval(data);
   } catch (error) {
-    if (error.status === 409 && error.data?.requires_print_date_confirmation && confirm("Only the print date is available. Use it as a low-confidence validity basis and approve?")) {
-      payload.confirmPrintDate = true;
-      await finishApproval(await api(`/v1/admin/documents/${state.selectedId}/approve`, { method:"POST", body:payload }));
+    if (error.status === 409 && error.data?.requires_print_date_confirmation) {
+      if (confirm("Only the print date is available. Use it as a low-confidence validity basis and approve?")) return runApprove({ ...payload, confirmPrintDate:true });
       return;
     }
+    if (error.status === 409 && error.data?.code === "DUPLICATE_APPROVED") return openDuplicateDialog(error.data, payload);
     throw error;
+  } finally {
+    elements.approveButton.disabled = false;
   }
+}
+
+function openDuplicateDialog(data, payload) {
+  state.pendingApprovePayload = payload || null;
+  state.duplicateExistingId = data?.existing?.id || "";
+  elements.duplicateMessage.textContent = data?.error || "This SDS appears to already exist. You can use the existing approved SDS, mark this as duplicate, or upload it as a new revision.";
+  const existing = data?.existing || {};
+  elements.duplicateExisting.replaceChildren(...[
+    ["Existing SDS", existing.product_name || "—"], ["Revision date", existing.revision_date || "—"], ["Approved file", existing.approved_filename || "—"]
+  ].map(([label,value]) => node("div", { className:"duplicate-existing-row" }, [
+    node("span", { className:"duplicate-existing-label", textContent:label }), node("span", { textContent:String(value) })
+  ])));
+  if (existing.pdf_url) elements.duplicateExisting.append(node("a", { className:"secondary-action", href:existing.pdf_url, target:"_blank", rel:"noopener", textContent:"Open existing approved SDS" }));
+  elements.duplicateMarkButton.disabled = !state.duplicateExistingId;
+  elements.duplicateDialog.showModal();
+}
+
+async function confirmDuplicateAsDuplicate() {
+  const id = state.duplicateExistingId;
+  elements.duplicateDialog.close();
+  if (!id) return showToast("No existing approved SDS to link to.");
+  await markDuplicate(id);
+}
+
+async function confirmUploadAsNewRevision() {
+  const payload = { ...(state.pendingApprovePayload || { metadata:collectReviewMetadata(), comment:elements.reviewComment.value }), confirmNewRevision:true };
+  elements.duplicateDialog.close();
+  await runApprove(payload);
 }
 
 async function finishApproval(data) {
@@ -369,11 +426,11 @@ async function reextract() {
   showToast("Re-extraction completed and returned to review.");
 }
 
-async function markDuplicate() {
+async function markDuplicate(duplicateOfId) {
   if (!isAdmin()) return;
-  const duplicateOfId = prompt("Enter the controlling document ID:");
-  if (!duplicateOfId) return;
-  await documentAction("duplicate", "POST", { duplicate_of_id:duplicateOfId.trim(), comment:elements.reviewComment.value });
+  const id = (typeof duplicateOfId === "string" && duplicateOfId.trim()) || (prompt("Enter the controlling approved SDS document ID:") || "").trim();
+  if (!id) return;
+  await documentAction("duplicate", "POST", { duplicate_of_id:id, comment:elements.reviewComment.value });
   showToast("Document marked as duplicate."); state.selectedId = ""; await loadReviewList();
 }
 
@@ -438,9 +495,12 @@ function openBulkDialog(action) {
   if (!state.selectedIds.size) return showToast("Select at least one SDS record first.");
   state.bulkAction = action;
   const word = action.toUpperCase();
-  const impact = action === "restore" ? "Records will return to the controlled register." : "Affected approved SDS records will no longer appear in the public catalog or search/QR results.";
-  elements.bulkDialogTitle.textContent = `Confirm bulk ${action}`;
-  elements.bulkDialogMessage.textContent = `${state.selectedIds.size} SDS record(s) will be ${action === "delete" ? "soft-deleted" : action + "d"}. ${impact} The action and your identity will be recorded in the audit trail. Type ${word} below.`;
+  const impact = action === "restore" ? "Records will return to the controlled register."
+    : action === "purge" ? "This permanently deletes the records and their stored original/approved PDFs. It cannot be undone and there is no backup."
+    : "Affected approved SDS records will no longer appear in the public catalog or search/QR results.";
+  const verb = action === "delete" ? "soft-deleted" : action === "purge" ? "permanently deleted" : `${action}d`;
+  elements.bulkDialogTitle.textContent = action === "purge" ? "Confirm permanent deletion" : `Confirm bulk ${action}`;
+  elements.bulkDialogMessage.textContent = `${state.selectedIds.size} SDS record(s) will be ${verb}. ${impact} The action and your identity will be recorded in the audit trail. Type ${word} below.`;
   elements.bulkReason.value = ""; elements.bulkConfirmation.value = ""; elements.bulkConfirmButton.textContent = `Confirm ${word}`;
   elements.bulkDialog.showModal();
 }
@@ -488,6 +548,7 @@ async function loadDetail(documentId) {
 }
 
 const UPLOAD_LIMITS = { pdf: 15 * 1024 * 1024, zip: 20 * 1024 * 1024 };
+const UPLOAD_STATUS_LABELS = { processed: "Uploaded · needs review", duplicate: "Possible duplicate", rejected: "Skipped", failed: "Failed" };
 
 function classifyUpload(file) {
   const name = String(file.name || "").trim();
@@ -537,7 +598,8 @@ async function uploadDocument(event) {
 
   state.uploading = true;
   elements.uploadButton.disabled = true; elements.pdfInput.disabled = true;
-  elements.uploadProgress.hidden = false; elements.uploadResult.hidden = true; elements.uploadResult.replaceChildren();
+  elements.uploadProgress.hidden = false; elements.uploadProgress.classList.add("is-busy"); elements.uploadResult.hidden = true; elements.uploadResult.replaceChildren();
+  markUploadStep("extract");
 
   let lastDocId = "";
   for (let index = 0; index < queue.length; index += 1) {
@@ -555,11 +617,23 @@ async function uploadDocument(event) {
   }
 
   renderUploadResults(rows);
+  markUploadStep("done");
+  elements.uploadProgress.classList.remove("is-busy");
   elements.uploadProgress.textContent = "Completed. Every accepted SDS is in Needs Review and awaits EHS approval.";
   if (lastDocId) { state.selectedId = lastDocId; elements.detailNav.disabled = false; }
   elements.uploadForm.reset();
   state.uploading = false; elements.uploadButton.disabled = false; elements.pdfInput.disabled = false;
   elements.uploadButton.textContent = "Upload and extract";
+}
+
+function markUploadStep(active) {
+  const order = ["select","extract","review","done"];
+  const index = order.indexOf(active);
+  elements.uploadStepper?.querySelectorAll(".step").forEach((step) => {
+    const position = order.indexOf(step.dataset.step);
+    step.classList.toggle("is-active", position === index);
+    step.classList.toggle("is-done", position < index);
+  });
 }
 
 function renderUploadResults(rows) {
@@ -575,7 +649,7 @@ function renderUploadResults(rows) {
     const sections = item.sections_complete === true ? "16/16"
       : Array.isArray(item.missing_sections) && item.missing_sections.length ? `Missing ${item.missing_sections.join(", ")}` : "-";
     body.append(node("tr", { className:`upload-row upload-row-${item.status}` }, [
-      item.filename, item.status, item.product_name || "-", item.manufacturer || "-",
+      item.filename, UPLOAD_STATUS_LABELS[item.status] || item.status, item.product_name || "-", item.manufacturer || "-",
       item.date_detected ? `${item.date_detected} / ${item.date_basis_used || "unknown"}` : "-", sections, item.reason || "-"
     ].map((value) => node("td", { textContent:String(value) }))));
   }
