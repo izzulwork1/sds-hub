@@ -1,4 +1,4 @@
-import { assessSdsText, calculateMissingFields, detectSdsDates, detectSections, extractAllText, extractFirstTwoPages, extractWithRegex } from "./extraction.ts";
+import { assessSdsText, calculateMissingFields, detectDocumentLanguage, detectSdsDates, detectSections, extractAllText, extractFirstTwoPages, extractWithRegex } from "./extraction.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -55,6 +55,12 @@ Deno.test("extracts the labelled WD-40 trade name without relying on the filenam
 Deno.test("routes an image-only SDS to Gemini/OCR", () => {
   const assessment = assessSdsText("");
   equal(assessment.weakText, true, "OCR routing");
+});
+
+Deno.test("classifies SDS document language for variant grouping", () => {
+  equal(detectDocumentLanguage("Safety Data Sheet. Hazard identification. Supplier. Revision date. First aid.").language, "en", "english");
+  equal(detectDocumentLanguage("Helaian Data Keselamatan. BAHAGIAN 1. Pengenalan bahaya. Tarikh penyediaan. Pembekal.").language, "ms", "malay");
+  equal(detectDocumentLanguage("Safety Data Sheet (Helaian Data Keselamatan). Product Name / Nama Produk. Preparation Date / Tarikh Penyediaan.").language, "bilingual", "bilingual");
 });
 
 // Regression: SPU 6-92S is a legacy MSDS with all 16 numeric sections but non-standard titles.

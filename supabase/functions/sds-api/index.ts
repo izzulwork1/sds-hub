@@ -1,4 +1,4 @@
-import { assessSdsText, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction } from "../_shared/extraction.ts";
+import { assessSdsText, detectDocumentLanguage, detectSections, extractAllText, extractFirstTwoPages, extractWithGemini, extractWithRegex, mergeExtraction } from "../_shared/extraction.ts";
 import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { deleteRows, insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { deleteReleaseAsset, downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
@@ -246,6 +246,7 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
   let sectionScanText = textResult.text;
   try { const allPages = await extractAllText(bytes); if (allPages.text) sectionScanText = allPages.text; } catch { /* fall back to first-page text */ }
   const sections = detectSections(sectionScanText);
+  const docLanguage = detectDocumentLanguage(sectionScanText);
   const assessment = assessSdsText(textResult.text);
   const regex = extractWithRegex(textResult.text);
   const preliminary = classifySdsReview(regex, {
@@ -302,6 +303,10 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     sections_found: sections.found,
     missing_sections: sections.missing,
     section_detection_confidence: sections.confidence,
+    document_language: docLanguage.language,
+    language_confidence: docLanguage.confidence,
+    language_detection_reason: docLanguage.reason,
+    is_bilingual: docLanguage.language === "bilingual",
     status: "Extracted",
     ocr_required: assessment.weakText || Boolean(textError),
     extraction_method: method,

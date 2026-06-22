@@ -489,6 +489,34 @@ function detectLanguage(text: string) {
   return ["helaian data keselamatan", "bahaya", "pembekal", "kegunaan yang disarankan"].some((term) => normalized.includes(term)) ? "Malay" : "English";
 }
 
+const EN_LANGUAGE_INDICATORS = [
+  "safety data sheet", "material safety data sheet", "hazard identification", "first-aid", "first aid",
+  "exposure control", "handling and storage", "supplier", "revision date", "physical and chemical"
+];
+const MS_LANGUAGE_INDICATORS = [
+  "helaian data keselamatan", "lampiran data keselamatan", "bahagian", "pengenalan bahaya", "pertolongan cemas",
+  "kawalan pendedahan", "tarikh penyediaan", "tarikh ulasan", "kata isyarat", "pembekal", "bahaya"
+];
+
+// Classify the SDS language for variant grouping: en / ms / bilingual / unknown.
+export function detectDocumentLanguage(text: string) {
+  const lower = String(text || "").toLowerCase().replace(/\s*-\s*/g, "-");
+  const en = EN_LANGUAGE_INDICATORS.filter((term) => lower.includes(term)).length;
+  const ms = MS_LANGUAGE_INDICATORS.filter((term) => lower.includes(term)).length;
+  const pairedLabels = [
+    ["product name", "nama produk"], ["safety data sheet", "helaian data keselamatan"],
+    ["preparation date", "tarikh penyediaan"], ["signal word", "kata isyarat"]
+  ].some(([eng, mly]) => lower.includes(eng) && lower.includes(mly));
+  let language: "en" | "ms" | "bilingual" | "unknown";
+  let reason: string;
+  if (pairedLabels || (en >= 3 && ms >= 3)) { language = "bilingual"; reason = `English (${en}) and Bahasa Melayu (${ms}) indicators${pairedLabels ? " with paired labels" : ""}`; }
+  else if (ms > en && ms >= 2) { language = "ms"; reason = `Bahasa Melayu indicators (${ms})`; }
+  else if (en >= 2) { language = "en"; reason = `English indicators (${en})`; }
+  else { language = "unknown"; reason = "insufficient language indicators"; }
+  const confidence = language === "unknown" ? 20 : Math.min(95, 40 + (en + ms) * 8);
+  return { language, confidence, reason };
+}
+
 const GENERIC_NAMES = new Set([
   "organic mixture", "chemical mixture", "mixture", "preparation", "substance", "product",
   "article", "not available", "not applicable", "n/a", "na", "none", "sds", "msds",
