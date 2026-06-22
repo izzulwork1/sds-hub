@@ -183,7 +183,9 @@ export function detectSdsDates(text: string) {
   for (const field of DATE_PRIORITY) {
     for (const label of DATE_LABELS[field].sort((a, b) => b.length - a.length)) {
       const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const match = source.match(new RegExp(`(?:^|\\n|\\r|\\b)${escaped}\\s*(?:[:#]|[-\u2013\u2014])?\\s*(${DATE_VALUE_PATTERN})`, "i"));
+      // Adjacent value, then fall back to a label-row / value-row tabular layout (value on the next line).
+      const match = source.match(new RegExp(`(?:^|\\n|\\r|\\b)${escaped}\\s*(?:[:#]|[-\u2013\u2014])?\\s*(${DATE_VALUE_PATTERN})`, "i"))
+        || source.match(new RegExp(`${escaped}\\b[^\\n]*\\r?\\n[^\\d\\n]*(${DATE_VALUE_PATTERN})`, "i"));
       if (!match) continue;
       const normalized = normalizeSdsDate(match[1]);
       if (!normalized.value) continue;
@@ -263,10 +265,10 @@ export function extractWithRegex(text: string) {
   const assessment = assessSdsText(text);
   const dates = detectSdsDates(text);
   result.is_likely_sds = assessment.isLikelySds;
-  result.product_name = firstLabel(text, ["Product name", "Product identifier", "Material name", "Nama produk"]);
-  result.trade_name = firstLabel(text, ["Trade name", "Nama dagangan"]);
-  result.supplier = firstLabel(text, ["Supplier", "Supplier name", "Company name", "Company", "Responsible party", "Distributed by", "Pembekal"]);
-  result.manufacturer = firstLabel(text, ["Manufacturer", "Manufacturer name", "Manufactured by", "Manufacturer / Supplier", "Pengilang"]);
+  result.product_name = cleanProductName(firstLabel(text, ["Product name", "Product identifier", "Material name", "Nama produk"]));
+  result.trade_name = cleanProductName(firstLabel(text, ["Trade name", "Nama dagangan"]));
+  result.supplier = firstLabel(text, ["Supplier's Name", "Supplier name", "Supplier", "Company name", "Company", "Responsible party", "Distributed by", "Pembekal"]);
+  result.manufacturer = firstLabel(text, ["Manufacturer's Name", "Manufacturers Name", "Manufacturer name", "Manufacturer", "Manufactured by", "Manufacturer / Supplier", "Pengilang"]);
   result.issue_date = dates.issue_date;
   result.revision_date = dates.revision_date;
   result.preparation_date = dates.preparation_date;
@@ -384,9 +386,11 @@ export function buildReviewReason(result: Extraction, ocrRequired: boolean, dupl
 }
 
 function firstLabel(text: string, labels: string[]) {
+  // Normalise curly apostrophes/accents so labels like "Manufacturer's Name" match.
+  const source = String(text || "").replace(/[‘’′´`]/g, "'");
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = String(text || "").match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:\\-]\\s*([^\\n]{2,300})`, "i"));
+    const match = source.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:\\-]\\s*([^\\n]{2,300})`, "i"));
     if (match) return cleanValue(match[1]);
   }
   return null;
@@ -442,6 +446,8 @@ function cleanProductName(value: unknown) {
   let name = cleanValue(value);
   if (!name) return null;
   name = name.replace(/^(?:product\s*name|trade\s*name|material\s*name|product\s*identifier)\s*[:\-]?\s*/i, "");
+  // Flattened tables bleed the next column onto the same line; cut at the next labelled column.
+  name = name.replace(/\s+(?:file\s*name|issue\s*no\.?|page|use|cas\s*(?:no|number)|product\s*code|grade)\s*[:.\-)].*$/i, "");
   name = name.replace(/[\s\-_(]*\b(?:m?sds|safety data sheet|material safety data sheet)\b[\s\-_)]*$/i, "");
   name = name.replace(/\s*[-_]?\s*(?:v(?:er(?:sion)?)?\.?\s*\d+|rev(?:ision)?\.?\s*[\w.]+)\s*$/i, "");
   name = name.replace(/\s+/g, " ").replace(/[\s\-_(]+$/, "").trim();

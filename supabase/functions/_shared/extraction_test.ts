@@ -62,9 +62,13 @@ Deno.test("routes an image-only SDS to Gemini/OCR", () => {
 // preparation date, and be flagged as legacy — never as an incomplete SDS.
 Deno.test("legacy MSDS with all 16 numeric sections is complete, not incomplete (SPU 6-92S)", () => {
   const msds = [
-    "MATERIAL SAFETY DATA SHEET", "Product name: SPU 6-92S", "Manufacturer: UNASCO (M) SDN.BHD.",
-    "Date of preparation: 10/01/2014", "Issue No: 5",
+    "MATERIAL SAFETY DATA SHEET",
+    "Product Name:   SPU 6-92S   File Name:   msds-6-92S-5",
+    "Date of preparation:   Issue No:   Page :",
+    "10/01/2014   5   1 of 3",
     "SECTION 1 PRODUCT AND COMPANY IDENTIFICATION",
+    "Product Name   SPU 6-92S   Use :   Zinc phosphating solution",
+    "Manufacturer’s Name   :   UNASCO (M) SDN.BHD.",
     "SECTION 2 COMPOSITION INFORMATION",
     "SECTION 3 HAZARDS IDENTIFICATION",
     "SECTION 4 EMERGENCY AND FIRST AID PROCEDURES",
@@ -94,10 +98,8 @@ Deno.test("legacy MSDS with all 16 numeric sections is complete, not incomplete 
   if (dates.detected_date_confidence === 0) throw new Error("a labelled preparation date must not be 0% confidence");
 
   const meta = extractWithRegex(msds);
-  if (!String(meta.product_name || meta.trade_name).toUpperCase().includes("SPU 6-92S")) {
-    throw new Error(`product name not detected: ${meta.product_name} / ${meta.trade_name}`);
-  }
-  if (!meta.manufacturer) throw new Error("manufacturer (UNASCO) must be detected");
+  equal(meta.product_name, "SPU 6-92S", "clean product name without the File Name column");
+  if (!String(meta.manufacturer || "").includes("UNASCO")) throw new Error(`manufacturer (UNASCO) not detected: ${meta.manufacturer}`);
   const missing = calculateMissingFields(meta);
   if (missing.includes("supplier")) throw new Error("supplier must not be missing when a manufacturer is present");
   if (missing.includes("manufacturer")) throw new Error("manufacturer must not be missing");
