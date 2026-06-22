@@ -699,7 +699,9 @@ async function duplicateList(cors: Record<string, string> | null) {
 }
 
 async function publicCatalog(cors: Record<string, string> | null) {
-  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&deleted_at=is.null&archived_at=is.null&order=product_name.asc.nullslast,trade_name.asc");
+  // Only Approved rows are published, so per-language approval is already enforced: a pending or
+  // rejected language variant simply is not returned and stays hidden from employees.
+  const rows = await selectRows("sds_documents", "select=id,approved_filename,approved_download_url,product_name,trade_name,supplier,manufacturer,language,document_language,is_bilingual,sds_record_id,revision_date,established_date,expiry_date,signal_word,hazard_statements,recommended_use,updated_at&status=eq.Approved&deleted_at=is.null&archived_at=is.null&order=product_name.asc.nullslast,trade_name.asc");
   return json({
     schemaVersion: 1,
     updatedAt: new Date().toISOString().slice(0, 10),
@@ -715,6 +717,9 @@ async function publicCatalog(cors: Record<string, string> | null) {
       documentType: "SDS",
       manufacturer: row.manufacturer || row.supplier || "",
       language: row.language || "",
+      documentLanguage: row.document_language || "unknown",
+      isBilingual: Boolean(row.is_bilingual),
+      groupId: row.sds_record_id || null,
       hazards: Array.isArray(row.hazard_statements) ? row.hazard_statements.slice(0, 6) : [],
       signalWord: row.signal_word || "",
       recommendedUse: row.recommended_use || ""

@@ -50,6 +50,9 @@ export function sanitizeCatalog(documents) {
       productCode: document.productCode?.trim() || "",
       location: document.location?.trim() || "",
       language: document.language?.trim() || "",
+      documentLanguage: ["en", "ms", "bilingual", "unknown"].includes(document.documentLanguage) ? document.documentLanguage : "unknown",
+      isBilingual: Boolean(document.isBilingual),
+      groupId: typeof document.groupId === "string" && document.groupId.trim() ? document.groupId.trim() : "",
       pdfUrl: document.pdfUrl?.trim() || "",
       establishedDate: document.establishedDate?.trim() || "",
       expiryDate: document.expiryDate?.trim() || "",
@@ -57,6 +60,45 @@ export function sanitizeCatalog(documents) {
     }))
     .sort((left, right) => collator.compare(left.name, right.name));
 }
+
+// Collapse language variants that EHS has grouped (shared groupId) into one product, so an employee
+// sees one record per product with a language choice. Ungrouped documents each stay their own
+// single-variant product, so behaviour is unchanged until EHS actually links variants together.
+export function buildProductGroups(documents) {
+  const groups = new Map();
+  const order = [];
+  for (const documentRecord of documents) {
+    const key = documentRecord.groupId || `solo:${documentRecord.id}`;
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key).push(documentRecord);
+  }
+  return order.map((key) => {
+    const variants = groups.get(key);
+    const representative = pickVariant(variants, "en") || variants[0];
+    return { key, id: representative.id, name: representative.name, variants, languages: availableLanguages(variants), representative };
+  });
+}
+
+// Employee languages a group can serve. A bilingual variant satisfies both English and Bahasa Melayu.
+export function availableLanguages(variants) {
+  const set = new Set();
+  for (const variant of variants) {
+    if (variant.documentLanguage === "bilingual" || variant.isBilingual) { set.add("en"); set.add("ms"); }
+    else if (variant.documentLanguage === "en") set.add("en");
+    else if (variant.documentLanguage === "ms") set.add("ms");
+  }
+  return [...set];
+}
+
+// Best variant for a requested language: an exact single-language match, else a bilingual variant
+// (covers any language), else null when that language is not available.
+export function pickVariant(variants, language) {
+  return variants.find((variant) => variant.documentLanguage === language)
+    || variants.find((variant) => variant.documentLanguage === "bilingual" || variant.isBilingual)
+    || null;
+}
+
+export const EMPLOYEE_LANGUAGES = [{ code: "en", label: "English" }, { code: "ms", label: "Bahasa Melayu" }];
 
 export function getDepartments(documents) {
   return [...new Set(documents.map((document) => document.department).filter(Boolean))]

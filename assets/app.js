@@ -1,9 +1,13 @@
 import {
+  availableLanguages,
+  buildProductGroups,
+  EMPLOYEE_LANGUAGES,
   filterCatalog,
   formatRevisionDate,
   getDepartments,
   getLanguages,
   languageLabel,
+  pickVariant,
   resolveDepartment,
   resolveLanguage,
   sanitizeCatalog,
@@ -75,8 +79,14 @@ const elements = {
   askAiButton: document.querySelector("#askAiButton"),
   aiResponse: document.querySelector("#aiResponse"),
   catalogUpdated: document.querySelector("#catalogUpdated"),
+  detailLanguageSwitcher: document.querySelector("#detailLanguageSwitcher"),
   toast: document.querySelector("#toast")
 };
+
+function readPreferredLanguage() {
+  try { const stored = localStorage.getItem("sdsEmployeeLang"); if (stored === "en" || stored === "ms") return stored; } catch { /* storage blocked */ }
+  return "en"; // default to English
+}
 
 const state = {
   catalog: [],
@@ -87,6 +97,7 @@ const state = {
   language: "All",
   expiringOnly: false,
   selectedId: "",
+  preferredLanguage: readPreferredLanguage(),
   updatedAt: "",
   loaded: false,
   previewToken: 0
@@ -285,19 +296,25 @@ function renderCatalog() {
 
   let matches = filterCatalog(state.catalog, state.query, state.department, state.language);
   if (state.expiringOnly) matches = matches.filter((document) => validityStatus(document).state === "expiring");
+  // Collapse EHS-grouped language variants into one product entry (a no-op until variants are linked,
+  // since each ungrouped document is its own single-variant product).
+  const groups = buildProductGroups(matches);
   elements.resultsList.replaceChildren();
-  elements.noResultsState.hidden = matches.length > 0 || state.catalog.length === 0;
-  elements.resultsList.hidden = matches.length === 0 || state.catalog.length === 0;
-  elements.resultsCount.textContent = `${matches.length} ${matches.length === 1 ? "document" : "documents"}`;
+  elements.noResultsState.hidden = groups.length > 0 || state.catalog.length === 0;
+  elements.resultsList.hidden = groups.length === 0 || state.catalog.length === 0;
+  elements.resultsCount.textContent = `${groups.length} ${groups.length === 1 ? "document" : "documents"}`;
 
-  if (matches.length === 0) return;
+  if (groups.length === 0) return;
 
   const fragment = document.createDocumentFragment();
-  matches.forEach((document) => fragment.append(createResultItem(document)));
+  groups.forEach((group) => {
+    const representative = pickVariant(group.variants, state.preferredLanguage) || group.representative;
+    fragment.append(createResultItem(representative, group));
+  });
   elements.resultsList.append(fragment);
 }
 
-function createResultItem(documentRecord) {
+function createResultItem(documentRecord, group = null) {
   const item = document.createElement("li");
   const button = document.createElement("button");
   const icon = document.createElement("span");
@@ -330,7 +347,12 @@ function createResultItem(documentRecord) {
   documentType.textContent = documentRecord.documentType;
   meta.append(manufacturer, documentType, revision);
 
-  if (documentRecord.language) {
+  if (group && group.languages.length > 1) {
+    const language = document.createElement("span");
+    language.className = "result-language";
+    language.textContent = "English / Bahasa Melayu";
+    meta.append(language);
+  } else if (documentRecord.language) {
     const language = document.createElement("span");
     language.className = "result-language";
     language.textContent = languageLabel(documentRecord.language);
@@ -379,6 +401,61 @@ function selectDocumentById(documentId, options) {
   showDocument(documentRecord, options);
 }
 
+// Language variants of one product grouped by EHS, plus the currently displayed document.
+function variantsForDocument(documentRecord) {
+  return documentRecord.groupId
+    ? state.catalog.filter((item) => item.groupId && item.groupId === documentRecord.groupId)
+    : [documentRecord];
+}
+
+// Employee language chooser shown on the detail view when a product has more than one language.
+// Default English; remembers the choice; a bilingual PDF satisfies both languages.
+function renderLanguageSwitcher(documentRecord) {
+  const container = elements.detailLanguageSwitcher;
+  if (!container) return;
+  container.replaceChildren();
+  const variants = variantsForDocument(documentRecord);
+  const languages = availableLanguages(variants);
+  if (variants.length <= 1 && languages.length <= 1) { container.hidden = true; return; }
+  container.hidden = false;
+
+  const activeCode = documentRecord.documentLanguage === "bilingual" || documentRecord.isBilingual
+    ? state.preferredLanguage
+    : documentRecord.documentLanguage;
+  for (const { code, label } of EMPLOYEE_LANGUAGES) {
+    if (!languages.includes(code)) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "lang-switch-button";
+    button.textContent = label;
+    button.setAttribute("aria-pressed", String(code === activeCode));
+    button.addEventListener("click", () => selectEmployeeLanguage(code, documentRecord.groupId));
+    container.append(button);
+  }
+
+  const note = document.createElement("span");
+  note.className = "lang-switch-note";
+  if (languages.length === 1) {
+    note.textContent = languages[0] === "en"
+      ? "Only the English SDS is currently available."
+      : "Only the Bahasa Melayu SDS is currently available.";
+  } else if (variants.some((variant) => variant.documentLanguage === "bilingual" || variant.isBilingual)) {
+    note.textContent = "Bilingual English / Bahasa Melayu SDS available.";
+  } else {
+    note.textContent = "Choose your language.";
+  }
+  container.append(note);
+}
+
+function selectEmployeeLanguage(language, groupId) {
+  if (language !== "en" && language !== "ms") return;
+  state.preferredLanguage = language;
+  try { localStorage.setItem("sdsEmployeeLang", language); } catch { /* storage blocked */ }
+  if (!groupId) return;
+  const variant = pickVariant(state.catalog.filter((item) => item.groupId === groupId), language);
+  if (variant) showDocument(variant);
+}
+
 function showDocument(documentRecord, { updateHistory = true, scroll = true } = {}) {
   state.selectedId = documentRecord.id;
   elements.detailPlaceholder.hidden = true;
@@ -390,6 +467,7 @@ function showDocument(documentRecord, { updateHistory = true, scroll = true } = 
   elements.detailRevision.textContent = `${documentRecord.documentType} - ${revisionLabel}`;
   elements.detailTitle.textContent = documentRecord.name;
   setValidity(documentRecord);
+  renderLanguageSwitcher(documentRecord);
 
   setMetadata(elements.manufacturerRow, elements.detailManufacturer, documentRecord.manufacturer);
   setMetadata(elements.productCodeRow, elements.detailProductCode, documentRecord.productCode);

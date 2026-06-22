@@ -13,6 +13,15 @@
 .review-summary-value{color:var(--ink);font-size:.8rem;font-weight:700;overflow-wrap:anywhere}
 .review-summary-row.is-danger .review-summary-value{color:var(--red)}
 @media(max-width:650px){.review-summary-grid{grid-template-columns:1fr}}
+.grouping-card{background:#fff7ed;border-color:#f4d8b0}
+.grouping-hint{margin:10px 0 8px;color:var(--navy-900);font-size:.76rem;line-height:1.45}
+.grouping-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.variant-compare{width:100%;border-collapse:collapse;margin:4px 0 2px;font-size:.76rem}
+.variant-compare th,.variant-compare td{border:1px solid #e6ccab;padding:6px 8px;text-align:left;vertical-align:top}
+.variant-compare th{background:#fdebd2;color:var(--navy-900);font-weight:800;font-size:.66rem;text-transform:uppercase;letter-spacing:.03em}
+.variant-compare td:first-child{color:var(--muted);font-weight:750;white-space:nowrap}
+.variant-list{margin:6px 0 0;padding-left:18px;font-size:.76rem;line-height:1.5}
+.variant-list strong{color:var(--navy-900)}
 .upload-row td:nth-child(2){font-weight:800;text-transform:capitalize}
 .upload-row-processed td:nth-child(2){color:var(--green)}
 .upload-row-duplicate td:nth-child(2){color:#704c00}

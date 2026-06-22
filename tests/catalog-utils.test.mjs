@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  availableLanguages,
+  buildProductGroups,
   filterCatalog,
   formatRevisionDate,
   getDepartments,
   isIsoDate,
   isValidDocument,
   normalizeText,
+  pickVariant,
   resolveDepartment,
   sanitizeCatalog
 } from "../assets/catalog-utils.js";
@@ -40,6 +43,29 @@ const fixtures = [
 
 test("normalizes punctuation and accents for search", () => {
   assert.equal(normalizeText("  Crème #42 / Cleaner  "), "creme 42 cleaner");
+});
+
+test("groups language variants of one product and chooses the right variant", () => {
+  const variants = sanitizeCatalog([
+    { id: "nitric-en", name: "Nitric Acid 68%", file: "nitric-en.pdf", department: "Lab", documentLanguage: "en", groupId: "rec-1" },
+    { id: "nitric-ms", name: "Nitric Acid 68%", file: "nitric-ms.pdf", department: "Lab", documentLanguage: "ms", groupId: "rec-1" },
+    { id: "acetone", name: "Acetone", file: "acetone.pdf", department: "Lab", documentLanguage: "en" }
+  ]);
+  const groups = buildProductGroups(variants);
+  assert.equal(groups.length, 2, "two products (one grouped pair + one standalone)");
+  const nitric = groups.find((group) => group.key === "rec-1");
+  assert.deepEqual(availableLanguages(nitric.variants).sort(), ["en", "ms"]);
+  assert.equal(pickVariant(nitric.variants, "ms").id, "nitric-ms", "BM variant chosen");
+  assert.equal(pickVariant(nitric.variants, "en").id, "nitric-en", "EN variant chosen");
+});
+
+test("a bilingual SDS satisfies both English and Bahasa Melayu", () => {
+  const variants = sanitizeCatalog([
+    { id: "thinner-bi", name: "Thinner 457", file: "thinner-bi.pdf", department: "Paint", documentLanguage: "bilingual", isBilingual: true, groupId: "rec-2" }
+  ]);
+  assert.deepEqual(availableLanguages(variants).sort(), ["en", "ms"]);
+  assert.equal(pickVariant(variants, "en").id, "thinner-bi");
+  assert.equal(pickVariant(variants, "ms").id, "thinner-bi");
 });
 
 test("validates safe catalog records", () => {

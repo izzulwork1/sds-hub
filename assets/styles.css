@@ -632,6 +632,37 @@ a {
   display: none;
 }
 
+.lang-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.lang-switch-button {
+  padding: 5px 14px;
+  border: 1px solid var(--green-700);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--green-700);
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.lang-switch-button[aria-pressed="true"] {
+  background: var(--green-700);
+  color: #fff;
+}
+
+.lang-switch-note {
+  flex: 1 1 100%;
+  color: var(--ink, #444);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
 .validity-valid {
   color: var(--green-700);
   background: var(--green-100);

@@ -47,10 +47,15 @@ const SECTION_TITLES = {
   12:"Ecological information",13:"Disposal considerations",14:"Transport information",
   15:"Regulatory information",16:"Other information"
 };
+const LANG_LABELS = { en:"English", ms:"Bahasa Melayu", bilingual:"Bilingual (EN/BM)", unknown:"Unknown" };
+const GROUP_STATUS_LABELS = {
+  unlinked:"Not grouped", suggested:"Possible language variant — needs EHS decision",
+  linked:"Linked as a language variant", separate:"Kept as a separate SDS"
+};
 
 const state = {
   apiUrl:String(config.adminApiUrl || "").replace(/\/$/, ""), supabase:null, session:null, profile:null,
-  currentView:"dashboard", selectedId:"", selectedDocument:null, visibleDocuments:[], selectedIds:new Set(), bulkAction:""
+  currentView:"dashboard", selectedId:"", selectedDocument:null, selectedGroup:null, visibleDocuments:[], selectedIds:new Set(), bulkAction:""
 };
 
 const elementIds = [
@@ -316,7 +321,7 @@ async function loadReviewList() {
 
 async function openReview(documentId) {
   const data = await api(`/v1/admin/documents/${documentId}`);
-  state.selectedId = documentId; state.selectedDocument = data.document; elements.detailNav.disabled = false;
+  state.selectedId = documentId; state.selectedDocument = data.document; state.selectedGroup = data.group || null; elements.detailNav.disabled = false;
   renderReviewForm(data.document); elements.reviewForm.hidden = false;
 }
 
@@ -333,8 +338,76 @@ function renderReviewForm(record) {
   ].filter(Boolean);
   elements.reviewWarnings.hidden = !warnings.length; elements.reviewWarnings.textContent = [...new Set(warnings)].join("\n");
   const evidence = buildEvidenceSummary(record.evidence_snippets);
-  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
+  const grouping = buildGroupingCard(record, state.selectedGroup);
+  elements.reviewFields.replaceChildren(buildValiditySummary(record), ...(grouping ? [grouping] : []), ...(evidence ? [evidence] : []), ...FIELD_DEFINITIONS.map(([field,label,type]) => createField(field,label,type,record[field])));
   elements.reviewComment.value = "";
+}
+
+// EHS language-variant grouping: detected language, a possible-variant suggestion with side-by-side
+// comparison and link/separate actions, or the canonical record this document is already linked to.
+function buildGroupingCard(record, group) {
+  if (!group) return null;
+  const langLabel = LANG_LABELS[group.document_language] || "Unknown";
+  const card = node("div", { className:"field-wide review-summary grouping-card" });
+  card.append(node("span", { className:"review-summary-title", textContent:"SDS language & variant grouping" }));
+  const grid = node("div", { className:"review-summary-grid" });
+  grid.append(
+    summaryRow("Detected language", `${langLabel}${group.is_bilingual ? " · bilingual" : ""} · ${group.language_confidence ?? 0}%`),
+    summaryRow("Grouping status", GROUP_STATUS_LABELS[group.language_variant_status] || "Not grouped", group.language_variant_status === "suggested")
+  );
+  if (group.language_detection_reason) grid.append(summaryRow("Language signals", group.language_detection_reason));
+  card.append(grid);
+
+  if (group.suggested_candidate) {
+    card.append(node("p", { className:"grouping-hint", textContent:`This looks like a ${langLabel} language variant of an existing SDS. Confirm to group them under one product record, or keep it separate. Nothing is published to employees until you approve it.` }));
+    card.append(buildVariantCompare(record, group.suggested_candidate));
+    if (isAdmin()) {
+      const linkBtn = node("button", { type:"button", className:"primary-action", textContent:"Link as language variant", onclick:() => groupAsVariant(group.suggested_candidate.id) });
+      const sepBtn = node("button", { type:"button", className:"secondary-action", textContent:"Keep separate", onclick:() => keepSeparate() });
+      card.append(node("div", { className:"grouping-actions" }, [linkBtn, sepBtn]));
+    }
+  }
+
+  if (group.record) {
+    card.append(node("p", { className:"grouping-hint", textContent:`Grouped under product record: ${group.record.canonical_product_name}` }));
+    const list = node("ul", { className:"variant-list" });
+    for (const variant of (group.linked_variants || [])) {
+      const tags = `${LANG_LABELS[variant.document_language] || "?"} · ${variant.status}${variant.approved_for_employee_view ? " · visible to employees" : ""}${variant.revision_date ? ` · rev ${variant.revision_date}` : ""}`;
+      list.append(node("li", {}, [ node("strong", { textContent:displayName(variant) }), node("span", { textContent:` — ${tags}` }) ]));
+    }
+    card.append(list);
+    if (isAdmin()) card.append(node("div", { className:"grouping-actions" }, [
+      node("button", { type:"button", className:"secondary-action", textContent:"Unlink from this group", onclick:() => keepSeparate() })
+    ]));
+  }
+  return card;
+}
+
+function buildVariantCompare(record, candidate) {
+  const table = node("table", { className:"variant-compare" });
+  table.append(node("tr", {}, [ node("th",{textContent:""}), node("th",{textContent:"Uploaded SDS"}), node("th",{textContent:"Existing SDS"}) ]));
+  const rows = [
+    ["Product", displayName(record), displayName(candidate)],
+    ["Language", LANG_LABELS[record.document_language] || "?", LANG_LABELS[candidate.document_language] || "?"],
+    ["Revision date", record.revision_date || "—", candidate.revision_date || "—"],
+    ["Status", record.status || "—", candidate.status || "—"]
+  ];
+  for (const [label,left,right] of rows) table.append(node("tr",{},[ node("td",{textContent:label}), node("td",{textContent:left}), node("td",{textContent:right}) ]));
+  return table;
+}
+
+async function groupAsVariant(candidateId) {
+  if (!isAdmin() || !state.selectedId || !candidateId) return;
+  await api(`/v1/admin/documents/${state.selectedId}/group`, { method:"POST", body:{ link_to_document_id:candidateId, comment:elements.reviewComment.value } });
+  showToast("Linked as a language variant under one product record.");
+  await openReview(state.selectedId);
+}
+
+async function keepSeparate() {
+  if (!isAdmin() || !state.selectedId) return;
+  await api(`/v1/admin/documents/${state.selectedId}/ungroup`, { method:"POST", body:{ comment:elements.reviewComment.value } });
+  showToast("Kept as a separate SDS.");
+  await openReview(state.selectedId);
 }
 
 function buildValiditySummary(record) {
