@@ -3,7 +3,7 @@ const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true })
 export function normalizeText(value) {
   return String(value ?? "")
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLocaleLowerCase("en")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -16,7 +16,16 @@ export function isValidDocument(document) {
   if (requiredStrings.some((key) => typeof document[key] !== "string" || !document[key].trim())) return false;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(document.id)) return false;
   const legacyFilename = /^[a-z0-9]+(?:-[a-z0-9]+)*\.pdf$/.test(document.file);
-  const controlledFilename = /^[A-Za-z0-9][A-Za-z0-9._,'-]{0,190}\.pdf$/.test(document.file) && typeof document.pdfUrl === "string";
+  // A controlled (intake-approved) filename is served via its own pdfUrl, so the file field is just a
+  // label. The backend only strips filesystem-illegal characters, so it legitimately keeps parentheses,
+  // spaces, & etc. (e.g. "UNASCO (M) SDN.BHD"). Accept any .pdf label that has a pdfUrl and is free of
+  // path separators and traversal — do not reject on ordinary punctuation.
+  const controlledFilename = typeof document.pdfUrl === "string"
+    && /\.pdf$/i.test(document.file)
+    && document.file.length <= 200
+    && !document.file.includes("..")
+    && !document.file.includes("/")
+    && !document.file.includes("\\");
   if (!legacyFilename && !controlledFilename) return false;
   if (document.revisionDate != null && document.revisionDate !== "" && !isIsoDate(document.revisionDate)) return false;
 

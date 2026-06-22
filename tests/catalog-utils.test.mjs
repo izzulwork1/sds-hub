@@ -68,6 +68,21 @@ test("a bilingual SDS satisfies both English and Bahasa Melayu", () => {
   assert.equal(pickVariant(variants, "ms").id, "thinner-bi");
 });
 
+test("accepts an approved filename with parentheses/spaces but blocks path traversal", () => {
+  const approved = {
+    id: "e5d73804-891b-42aa-9e51-5af1d44cb449",
+    name: "ADDITIVE 92",
+    file: "SDS_ADDITIVE_92_UNASCO_(M)_SDN.BHD_Rev-Date-Unknown_EN.pdf",
+    pdfUrl: "https://github.com/tamco-ehs/sds-hub/releases/download/sds-approved/SDS_ADDITIVE_92.pdf",
+    department: "Unassigned",
+    documentType: "SDS"
+  };
+  assert.equal(isValidDocument(approved), true, "parenthesised approved filename must be valid");
+  assert.equal(sanitizeCatalog([approved]).length, 1, "must survive sanitizeCatalog");
+  assert.equal(isValidDocument({ ...approved, file: "a/b.pdf" }), false, "path separators rejected");
+  assert.equal(isValidDocument({ ...approved, file: "..\\x.pdf" }), false, "traversal rejected");
+});
+
 test("validates safe catalog records", () => {
   assert.equal(isValidDocument(fixtures[0]), true);
   assert.equal(isValidDocument({ ...fixtures[0], file: "../secret.pdf" }), false);
