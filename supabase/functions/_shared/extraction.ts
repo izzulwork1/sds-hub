@@ -92,23 +92,26 @@ export const SDS_SECTION_TITLES: Record<number, string> = {
   14: "Transport information", 15: "Regulatory information", 16: "Other information"
 };
 
+// Broadened title synonyms (English + Bahasa Malaysia, stems) used to recognise a numbered SDS
+// heading regardless of exact wording. Each keyword is matched within ~90 chars AFTER the section
+// number, so the number anchors it to the right section.
 const SDS_SECTION_KEYWORDS: Record<number, string[]> = {
-  1: ["identification of the hazardous chemical", "identification of the substance", "identification", "pengenalan bahan kimia", "pengenalan"],
-  2: ["hazard identification", "hazards identification", "pengenalan bahaya"],
-  3: ["composition", "information on ingredients", "information of the ingredients", "komposisi", "ramuan"],
-  4: ["first-aid", "first aid", "pertolongan cemas"],
-  5: ["fire-fighting", "fire fighting", "firefighting", "pemadaman kebakaran"],
-  6: ["accidental release", "pelepasan tidak sengaja", "pelepasan secara tidak sengaja"],
-  7: ["handling and storage", "pengendalian dan penyimpanan"],
-  8: ["exposure control", "personal protection", "kawalan pendedahan", "perlindungan diri"],
-  9: ["physical and chemical properties", "physical & chemical properties", "sifat fizikal dan kimia"],
-  10: ["stability and reactivity", "kestabilan dan kereaktifan"],
-  11: ["toxicological", "toksikologi"],
-  12: ["ecological", "ekologi"],
-  13: ["disposal", "pelupusan"],
-  14: ["transport", "pengangkutan"],
-  15: ["regulatory", "pengawalseliaan", "pengawalan"],
-  16: ["other information", "maklumat lain", "maklumat tambahan"]
+  1: ["identification", "identity", "pengenalan"],
+  2: ["hazard", "bahaya"],
+  3: ["composition", "ingredient", "komposisi", "ramuan"],
+  4: ["first-aid", "first aid", "pertolongan cemas", "pertolongan"],
+  5: ["fire-fighting", "fire fighting", "firefighting", "fire and explosion", "fire", "kebakaran", "pemadaman"],
+  6: ["accidental release", "spill", "leak", "pelepasan", "tumpahan", "kebocoran"],
+  7: ["handling and storage", "handling", "storage", "pengendalian", "penyimpanan", "special precaution"],
+  8: ["exposure control", "exposure", "personal protection", "personal protective", "ppe", "pendedahan", "perlindungan"],
+  9: ["physical and chemical", "physical data", "physical & chemical", "physical", "sifat fizikal", "fizikal"],
+  10: ["stability and reactivity", "stability", "reactivity", "kestabilan", "kereaktifan"],
+  11: ["toxicolog", "toxicity", "toxicity data", "health hazard data", "toksikologi", "ketoksikan"],
+  12: ["ecolog", "ecotoxic", "environmental", "ekologi", "persekitaran", "alam sekitar"],
+  13: ["disposal", "waste", "pelupusan", "pembuangan"],
+  14: ["transport", "shipping", "pengangkutan", "perkapalan"],
+  15: ["regulat", "regulation", "peraturan", "pengawalseliaan", "perundangan"],
+  16: ["other information", "others information", "maklumat lain", "maklumat tambahan", "additional information"]
 };
 
 // Two independent checks, so a complete legacy MSDS is never reported as "incomplete":
@@ -123,8 +126,11 @@ export function detectSections(text: string) {
   const missing: number[] = [];
   const topicAligned: number[] = [];
   for (let section = 1; section <= 16; section += 1) {
-    (hasNumericSection(source, section) ? found : missing).push(section);
-    if (hasAlignedTitle(source, section)) topicAligned.push(section);
+    const aligned = hasAlignedTitle(source, section);
+    if (aligned) topicAligned.push(section);
+    // Numerically present = an explicit SECTION/BAHAGIAN marker OR a numbered heading carrying a
+    // recognised SDS title. Bare numeric table rows with no SDS title are not counted.
+    (hasNumericSection(source, section) || aligned ? found : missing).push(section);
   }
   const numericComplete = missing.length === 0;
   const missingTopics: number[] = [];
@@ -137,25 +143,27 @@ export function detectSections(text: string) {
   };
 }
 
-// "SECTION N" (any language) or a numbered heading "N. Title" at the start of a line.
+// Explicit section marker "SECTION N" / "SEKSYEN N" / "BAHAGIAN N", tolerant of spaces split inside
+// the word by PDF text extraction (e.g. "SECTI ON 3").
 function hasNumericSection(source: string, section: number) {
-  if (new RegExp(`\\b(?:section|seksyen|bahagian)\\s*0?${section}\\b`, "i").test(source)) return true;
-  return new RegExp(`(?:^|\\n|\\r)\\s*0?${section}\\s*[.)\\-:\u2013\u2014]\\s*[A-Za-z\u0100-\uffff]`, "m").test(source);
+  return new RegExp(`\\b(?:s\\s*e\\s*c\\s*t\\s*i\\s*o\\s*n|s\\s*e\\s*k\\s*s\\s*y\\s*e\\s*n|b\\s*a\\s*h\\s*a\\s*g\\s*i\\s*a\\s*n)\\s*0?${section}\\b`, "i").test(source);
 }
 
-// Section N also carries its modern GHS/CLASS title keyword near the number.
+// Numbered heading carrying a recognised SDS title near the number: "1. Identification",
+// "10.Stability" (no space), "SECTION 3 : PHYSICAL...", bilingual titles. The number anchors it.
 function hasAlignedTitle(source: string, section: number) {
-  const lower = source.toLowerCase();
+  // Collapse spaced hyphens so "First - aid" / "Fire - fighting" match the hyphenated keywords.
+  const lower = source.toLowerCase().replace(/\s*-\s*/g, "-");
   return SDS_SECTION_KEYWORDS[section].some((keyword) => {
     const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:section\\s*)?0?${section}\\s*(?:[.\\-:\u2013\u2014]|\\s)[^\\n]{0,100}${escaped}`, "im").test(lower);
+    return new RegExp(`(?:section|seksyen|bahagian)?\\s*0?${section}\\s*[.):\\-\u2013\u2014\\s][^\\n]{0,90}${escaped}`, "i").test(lower);
   });
 }
 
 type DateField = "revision_date" | "issue_date" | "preparation_date" | "print_date" | "effective_date" | "establishment_date";
 
 const DATE_LABELS: Record<DateField, string[]> = {
-  revision_date: ["Revision date", "Revised date", "Date of revision", "Tarikh semakan", "Tarikh disemak", "Revision"],
+  revision_date: ["Revision date", "Revised date", "Date of revision", "Tarikh ulasan", "Tarikh semakan", "Tarikh disemak", "Revision"],
   issue_date: ["Issue date", "Issued date", "Date of issue", "Tarikh dikeluarkan", "Tarikh keluaran"],
   preparation_date: ["Date of preparation", "SDS Date Of Preparation", "Date of Preparation/Revision", "Preparation date", "Prepared date", "Date prepared", "Tarikh penyediaan", "Tarikh disediakan"],
   print_date: ["Print date", "Printed date", "Printing date", "Tarikh cetakan", "Tarikh dicetak"],
@@ -169,7 +177,7 @@ const MONTHS: Record<string, number> = {
   may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9,
   sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
 };
-const DATE_VALUE_PATTERN = "(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{4}|\\d{1,2}[\\s-]+[A-Za-z]{3,9}[\\s-]+\\d{4}|[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4})";
+const DATE_VALUE_PATTERN = "(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{4}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2}\\b|\\d{1,2}[\\s-]+[A-Za-z]{3,9}[\\s-]+\\d{4}|[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4}|[A-Za-z]{3,9}[\\s-]+\\d{4})";
 
 export function detectSdsDates(text: string) {
   const source = String(text || "");
@@ -179,13 +187,17 @@ export function detectSdsDates(text: string) {
   };
   const labels: Partial<Record<DateField, string>> = {};
   const warnings: string[] = [];
+  // Columnised header (stacked labels, then a block of ": value" rows) — map by position first.
+  zipVerticalDates(source, dates, labels);
 
   for (const field of DATE_PRIORITY) {
+    if (dates[field]) continue;
     for (const label of DATE_LABELS[field].sort((a, b) => b.length - a.length)) {
       const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      // Adjacent value, then fall back to a label-row / value-row tabular layout (value on the next line).
+      // Adjacent value, then fall back to a windowed search (tabular label-row/value-row, bilingual
+      // label stacks, or other columns put the value within a short distance after the label).
       const match = source.match(new RegExp(`(?:^|\\n|\\r|\\b)${escaped}\\s*(?:[:#]|[-\u2013\u2014])?\\s*(${DATE_VALUE_PATTERN})`, "i"))
-        || source.match(new RegExp(`${escaped}\\b[^\\n]*\\r?\\n[^\\d\\n]*(${DATE_VALUE_PATTERN})`, "i"));
+        || source.match(new RegExp(`${escaped}\\b[\\s\\S]{0,80}?(${DATE_VALUE_PATTERN})`, "i"));
       if (!match) continue;
       const normalized = normalizeSdsDate(match[1]);
       if (!normalized.value) continue;
@@ -212,6 +224,30 @@ export function detectSdsDates(text: string) {
   };
 }
 
+// Columnised header: labels stacked on consecutive lines, then a block of ": value" rows. Map each
+// label to the value at the same position (e.g. VT-210 "Issued date / Rev. No. / Revised date / Page"
+// followed by ": 31/03/08 / : 4 / : 29/04/13 / : 1 of 4").
+function zipVerticalDates(source: string, dates: Record<DateField, string | null>, labels: Partial<Record<DateField, string>>) {
+  const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let start = 0; start < lines.length; start += 1) {
+    if (!/^:\s*\S/.test(lines[start])) continue;
+    let end = start;
+    while (end < lines.length && /^:\s*\S/.test(lines[end])) end += 1;
+    const values = lines.slice(start, end).map((line) => line.replace(/^:\s*/, ""));
+    const labelLines = lines.slice(start - values.length, start);
+    if (values.length < 2 || labelLines.length !== values.length) continue;
+    for (let index = 0; index < values.length; index += 1) {
+      const labelLine = labelLines[index].toLowerCase();
+      const normalized = normalizeSdsDate(values[index]);
+      if (!normalized.value) continue;
+      if (/revis|ulasan|semakan/.test(labelLine) && !dates.revision_date) { dates.revision_date = normalized.value; labels.revision_date = labelLines[index]; }
+      else if (/\bissue|dikeluarkan|keluaran/.test(labelLine) && !dates.issue_date) { dates.issue_date = normalized.value; labels.issue_date = labelLines[index]; }
+      else if (/prepar|penyediaan|disediakan/.test(labelLine) && !dates.preparation_date) { dates.preparation_date = normalized.value; labels.preparation_date = labelLines[index]; }
+    }
+    return;
+  }
+}
+
 function normalizeSdsDate(raw: string) {
   const value = String(raw || "").trim().replace(/\s+/g, " ");
   let year = 0, month = 0, day = 0;
@@ -223,8 +259,19 @@ function normalizeSdsDate(raw: string) {
     if (match) {
       const first = Number(match[1]), second = Number(match[2]);
       year = Number(match[3]);
+      // Default to day/month/year (Malaysian/EU convention) unless the first field can only be a month.
       if (first <= 12 && second > 12) { month = first; day = second; }
-      else { day = first; month = second; if (first <= 12 && second <= 12) warning = "ambiguous numeric date interpreted as day/month/year"; }
+      else { day = first; month = second; }
+    }
+  }
+  if (!match) {
+    // Two-digit year, e.g. 29/04/13 -> 2013-04-29.
+    match = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2})$/);
+    if (match) {
+      const first = Number(match[1]), second = Number(match[2]);
+      year = 2000 + Number(match[3]);
+      if (first <= 12 && second > 12) { month = first; day = second; }
+      else { day = first; month = second; }
     }
   }
   if (!match) {
@@ -234,6 +281,11 @@ function normalizeSdsDate(raw: string) {
   if (!match) {
     match = value.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i);
     if (match) { month = MONTHS[match[1].toLowerCase()] || 0; day = Number(match[2]); year = Number(match[3]); }
+  }
+  if (!match) {
+    // Month and year only, e.g. FEB 2022 -> 2022-02-01 (day unknown, month precision).
+    match = value.match(/^([A-Za-z]{3,9})[\s-]+(\d{4})$/i);
+    if (match) { month = MONTHS[match[1].toLowerCase()] || 0; year = Number(match[2]); day = 1; if (month) warning = "month precision (day assumed 01)"; }
   }
   if (!validCalendarDate(year, month, day)) return { value: null, warning: "" };
   return { value: `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`, warning };
@@ -267,7 +319,7 @@ export function extractWithRegex(text: string) {
   result.is_likely_sds = assessment.isLikelySds;
   result.product_name = cleanProductName(firstLabel(text, ["Product name", "Product identifier", "Material name", "Nama produk"]));
   result.trade_name = cleanProductName(firstLabel(text, ["Trade name", "Nama dagangan"]));
-  result.supplier = firstLabel(text, ["Supplier's Name", "Supplier name", "Supplier", "Company name", "Company", "Responsible party", "Distributed by", "Pembekal"]);
+  result.supplier = firstLabel(text, ["Syarikat", "Supplier's Name", "Supplier name", "Supplier", "Company name", "Company", "Responsible party", "Distributed by", "Pembekal"]);
   result.manufacturer = firstLabel(text, ["Manufacturer's Name", "Manufacturers Name", "Manufacturer name", "Manufacturer", "Manufactured by", "Manufacturer / Supplier", "Pengilang"]);
   result.issue_date = dates.issue_date;
   result.revision_date = dates.revision_date;
@@ -281,7 +333,8 @@ export function extractWithRegex(text: string) {
   result.validity_date_value = dates.validity_date_value;
   result.date_detection_warnings = dates.date_detection_warnings;
   result.recommended_use = firstLabel(text, ["Recommended use", "Product use", "Identified uses", "Kegunaan yang disarankan"]);
-  result.signal_word = firstMatch(text, /\b(DANGER|WARNING|AMARAN|BAHAYA)\b/i)?.toUpperCase() || null;
+  const rawSignal = firstMatch(text, /\b(DANGER|WARNING|AMARAN|BAHAYA)\b/i)?.toUpperCase() || null;
+  result.signal_word = rawSignal === "BAHAYA" ? "DANGER" : rawSignal === "AMARAN" ? "WARNING" : rawSignal;
   result.language = detectLanguage(text);
   result.cas_numbers = uniqueMatches(text, /\b\d{2,7}-\d{2}-\d\b/g);
   result.hazard_statements = extractStatements(text, /\bH\d{3}(?:\+H\d{3})?\b[^\n]*/gi);
@@ -390,8 +443,15 @@ function firstLabel(text: string, labels: string[]) {
   const source = String(text || "").replace(/[‘’′´`]/g, "'");
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = source.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:\\-]\\s*([^\\n]{2,300})`, "i"));
-    if (match) return cleanValue(match[1]);
+    // (a) Label (optionally followed by a bilingual partner label) then a colon and same-line value.
+    const inline = source.match(new RegExp(`(?:^|\\n)[^\\n]*?\\b${escaped}\\b[^:\\n]{0,40}[:\\-]\\s*([^\\n]{2,300})`, "i"));
+    if (inline && cleanValue(inline[1])) return cleanValue(inline[1]);
+    // (b) Column layout with no colon: "Manufacturer   AEV LIMITED", "Product Name   SPU 6-92S".
+    const spaced = source.match(new RegExp(`(?:^|\\n)[^\\n]*?\\b${escaped}\\b {2,}([A-Za-z0-9][^\\n]{2,200})`, "i"));
+    if (spaced && cleanValue(spaced[1])) return cleanValue(spaced[1]);
+    // (c) Label alone on its line, value on the next line: "NAMA PRODUK\nNITRIC ACID 68%".
+    const stacked = source.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[:\\-]?\\s*\\r?\\n\\s*([^\\n]{2,200})`, "i"));
+    if (stacked && cleanValue(stacked[1])) return cleanValue(stacked[1]);
   }
   return null;
 }
