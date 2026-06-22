@@ -3,6 +3,7 @@ import { generateApprovedFilename, sha256Hex } from "../_shared/filename.ts";
 import { deleteRows, insertRows, nowIso, selectRows, updateRows } from "../_shared/database.ts";
 import { deleteReleaseAsset, downloadPrivateAsset, uploadApproved, uploadOriginal } from "../_shared/github-releases.ts";
 import { classifySdsReview, findExtractionConflicts } from "../_shared/review-classification.ts";
+import { normalizeProductName, suggestGrouping } from "../_shared/grouping.ts";
 import { emptyExtraction, extractionSchema, pickEditableMetadata, SDS_STATUSES, type Extraction } from "../_shared/schema.ts";
 import { computeValidity } from "../_shared/validity.ts";
 import { BlobReader, Uint8ArrayWriter, ZipReader } from "npm:@zip.js/zip.js@2.7.57";
@@ -76,7 +77,7 @@ async function route(request: Request) {
   const bulkMatch = path.match(/^\/v1\/admin\/documents\/bulk\/(archive|delete|restore|purge)$/i);
   if (bulkMatch && request.method === "POST") return bulkAction(bulkMatch[1].toLowerCase(), request, cors, requireRole(actor, "EHS_ADMIN"));
 
-  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|archive|restore|file))?$/i);
+  const match = path.match(/^\/v1\/admin\/documents\/([a-f0-9-]+)(?:\/(extract|approve|reject|duplicate|group|ungroup|archive|restore|file))?$/i);
   if (!match || !UUID_PATTERN.test(match[1])) return json({ error: "Admin endpoint not found." }, 404, cors);
   const [, id, action = ""] = match;
   if (!action && request.method === "GET") return getDocument(id, cors, actor);
@@ -87,6 +88,8 @@ async function route(request: Request) {
   if (action === "archive" && request.method === "POST") return changeStatus(id, "Archived", "ARCHIVE", request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "restore" && request.method === "POST") return restoreDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "duplicate" && request.method === "POST") return markDuplicate(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "group" && request.method === "POST") return groupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
+  if (action === "ungroup" && request.method === "POST") return ungroupDocument(id, request, cors, requireRole(actor, "EHS_ADMIN"));
   if (action === "file" && request.method === "GET") return streamFile(id, url.searchParams.get("variant") || "original", true, cors, actor);
   return json({ error: "Method not allowed." }, 405, cors);
 }
@@ -264,7 +267,7 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     try { gemini = await extractWithGemini(bytes, textResult.text, geminiKey, model); } catch (error) { geminiError = safeError(error); }
   }
 
-  const candidates = await selectRows("sds_documents", `select=id,product_name,trade_name,revision_date,status&status=neq.Archived&deleted_at=is.null&archived_at=is.null&limit=1000`);
+  const candidates = await selectRows("sds_documents", `select=id,product_name,trade_name,supplier,manufacturer,document_language,revision_date,issue_date,preparation_date,effective_date,cas_numbers,file_sha256,status&status=neq.Archived&deleted_at=is.null&archived_at=is.null&limit=1000`);
   const product = regex.product_name || regex.trade_name || gemini?.product_name || gemini?.trade_name;
   const revision = regex.revision_date || gemini?.revision_date || "";
   const metadataDuplicate = product ? candidates.find((item: Record<string, unknown>) => (
@@ -288,6 +291,29 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     extractionConflicts,
     legacyMsds: sections.legacyMsds
   });
+  // Language-variant grouping: does this look like the EN/BM sibling of an existing SDS?
+  const grouping = suggestGrouping(
+    {
+      id, product_name: merged.product_name, trade_name: merged.trade_name,
+      supplier: merged.supplier, manufacturer: merged.manufacturer,
+      document_language: docLanguage.language, cas_numbers: merged.cas_numbers,
+      file_hash: document.file_sha256, revision_date: merged.revision_date,
+      issue_date: merged.issue_date, preparation_date: merged.preparation_date, effective_date: merged.effective_date
+    },
+    candidates.map((row: Record<string, unknown>) => ({
+      id: String(row.id), product_name: row.product_name as string, trade_name: row.trade_name as string,
+      supplier: row.supplier as string, manufacturer: row.manufacturer as string,
+      document_language: row.document_language as string, cas_numbers: row.cas_numbers as string[],
+      file_hash: row.file_sha256 as string, revision_date: row.revision_date as string,
+      issue_date: row.issue_date as string, preparation_date: row.preparation_date as string, effective_date: row.effective_date as string
+    }))
+  );
+  const languageVariantOf = grouping.relationship === "language_variant" ? grouping.candidateId : null;
+  if (languageVariantOf) {
+    const langLabel = docLanguage.language === "ms" ? "Bahasa Melayu" : docLanguage.language === "bilingual" ? "bilingual" : "English";
+    classification.reasons.push(`Possible ${langLabel} language variant of "${grouping.candidateProductName}" — confirm or keep separate during EHS review`);
+    for (const warning of grouping.warnings) classification.reasons.push(warning);
+  }
   // Single deduplicated reason built from the classifier (which already handles numeric-section
   // completeness, legacy MSDS, missing fields, conflicts and date warnings) plus extraction errors.
   const reasonParts = [...classification.reasons];
@@ -307,6 +333,8 @@ async function runExtraction(id: string, suppliedBytes: Uint8Array | null, actor
     language_confidence: docLanguage.confidence,
     language_detection_reason: docLanguage.reason,
     is_bilingual: docLanguage.language === "bilingual",
+    language_variant_of: languageVariantOf,
+    language_variant_status: languageVariantOf ? "suggested" : "unlinked",
     status: "Extracted",
     ocr_required: assessment.weakText || Boolean(textError),
     extraction_method: method,
@@ -356,12 +384,95 @@ async function getDocument(id: string, cors: Record<string, string> | null, acto
   const document = await fetchDocument(id);
   if (!document) return json({ error: "Document not found." }, 404, cors);
   if ((document.deleted_at || document.archived_at) && actor.role !== "EHS_ADMIN") return json({ error: "Role does not allow access to archived or deleted SDS records." }, 403, cors);
-  const [logs, reviewHistory, auditEvents] = await Promise.all([
+  const [logs, reviewHistory, auditEvents, group] = await Promise.all([
     selectRows("sds_extraction_logs", `select=*&document_id=eq.${id}&order=created_at.desc&limit=50`),
     selectRows("sds_review_history", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
-    selectRows("sds_audit_events", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`)
+    selectRows("sds_audit_events", `select=*&document_id=eq.${id}&order=created_at.desc&limit=100`),
+    buildVariantInfo(document)
   ]);
-  return json({ document, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
+  return json({ document, group, extraction_logs: logs, review_history: reviewHistory, audit_events: auditEvents }, 200, cors);
+}
+
+// Assemble the language-variant context an EHS reviewer needs: the suggested sibling (if any),
+// the canonical record this document is linked to, and the other language variants under it.
+async function buildVariantInfo(document: Record<string, any>) {
+  const info: Record<string, unknown> = {
+    document_language: document.document_language || "unknown",
+    language_confidence: document.language_confidence ?? null,
+    language_detection_reason: document.language_detection_reason || null,
+    is_bilingual: Boolean(document.is_bilingual),
+    language_variant_status: document.language_variant_status || "unlinked",
+    suggested_candidate: null,
+    record: null,
+    linked_variants: []
+  };
+  if (document.language_variant_of && document.language_variant_status === "suggested") {
+    const rows = await selectRows("sds_documents", `select=id,product_name,trade_name,document_language,revision_date,status&id=eq.${document.language_variant_of}&limit=1`);
+    if (rows.length) info.suggested_candidate = rows[0];
+  }
+  if (document.sds_record_id) {
+    const [records, variants] = await Promise.all([
+      selectRows("sds_records", `select=*&id=eq.${document.sds_record_id}&limit=1`),
+      selectRows("sds_documents", `select=id,product_name,trade_name,document_language,revision_date,status,approved_for_employee_view&sds_record_id=eq.${document.sds_record_id}&deleted_at=is.null&order=document_language.asc&limit=20`)
+    ]);
+    info.record = records[0] || null;
+    info.linked_variants = variants;
+  }
+  return info;
+}
+
+// Group this document with a sibling as a language variant of one canonical product record.
+async function groupDocument(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const existing = await fetchDocument(id);
+  if (!existing) return json({ error: "Document not found." }, 404, cors);
+  if (existing.deleted_at || existing.archived_at) return json({ error: "Restore this record before grouping it." }, 409, cors);
+  const siblingId = String(body.link_to_document_id || existing.language_variant_of || "");
+  if (!UUID_PATTERN.test(siblingId)) return json({ error: "A document to link with is required." }, 400, cors);
+  if (siblingId === id) return json({ error: "A document cannot be grouped with itself." }, 400, cors);
+  const sibling = await fetchDocument(siblingId);
+  if (!sibling) return json({ error: "The document to link with was not found." }, 404, cors);
+
+  let recordId: string | null = sibling.sds_record_id || existing.sds_record_id || null;
+  if (!recordId) {
+    const canonicalName = existing.product_name || sibling.product_name || existing.trade_name || sibling.trade_name || "Unnamed product";
+    const inserted = await insertRows("sds_records", {
+      canonical_product_name: canonicalName,
+      normalized_product_name: normalizeProductName(canonicalName),
+      supplier_or_manufacturer: existing.supplier || existing.manufacturer || sibling.supplier || sibling.manufacturer || null
+    });
+    recordId = (Array.isArray(inserted) ? inserted[0]?.id : (inserted as any)?.id) || null;
+  }
+  if (!recordId) return json({ error: "Could not create or resolve the product record." }, 500, cors);
+
+  const now = nowIso();
+  await updateRows("sds_documents", `id=eq.${id}`, {
+    sds_record_id: recordId, language_variant_of: siblingId, language_variant_status: "linked", updated_at: now, version: existing.version + 1
+  }, false);
+  if (!sibling.sds_record_id) {
+    await updateRows("sds_documents", `id=eq.${siblingId}`, {
+      sds_record_id: recordId, language_variant_status: "linked", updated_at: now, version: sibling.version + 1
+    }, false);
+  }
+  const updated = await fetchDocument(id);
+  await history(id, "GROUP_LANGUAGE_VARIANT", existing.status, updated?.status || existing.status, actor, { sds_record_id: recordId, linked_to: siblingId }, body.comment);
+  await auditEvent(actor, "GROUP_LANGUAGE_VARIANT", updated, body.comment, existing, updated);
+  return json({ document: updated, group: await buildVariantInfo(updated || existing) }, 200, cors);
+}
+
+// Keep this document separate (not a language variant of the suggested sibling).
+async function ungroupDocument(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
+  const body = await readJson(request);
+  const existing = await fetchDocument(id);
+  if (!existing) return json({ error: "Document not found." }, 404, cors);
+  const now = nowIso();
+  await updateRows("sds_documents", `id=eq.${id}`, {
+    sds_record_id: null, language_variant_of: null, language_variant_status: "separate", updated_at: now, version: existing.version + 1
+  }, false);
+  const updated = await fetchDocument(id);
+  await history(id, "SEPARATE_LANGUAGE_VARIANT", existing.status, updated?.status || existing.status, actor, { previous_record: existing.sds_record_id || null }, body.comment);
+  await auditEvent(actor, "SEPARATE_LANGUAGE_VARIANT", updated, body.comment, existing, updated);
+  return json({ document: updated, group: await buildVariantInfo(updated || existing) }, 200, cors);
 }
 
 async function saveReview(id: string, request: Request, cors: Record<string, string> | null, actor: Actor) {
@@ -443,6 +554,7 @@ async function approve(id: string, request: Request, cors: Record<string, string
     approved_download_url: asset.downloadUrl,
     approved_at: approvedAt,
     approved_by: actor.displayName,
+    approved_for_employee_view: true,
     updated_at: approvedAt,
     version: existing.version + 1
   }, false);

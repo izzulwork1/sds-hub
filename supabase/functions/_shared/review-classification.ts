@@ -114,11 +114,12 @@ export function classifySdsReview(metadata: Extraction, options: ClassificationO
 export function findExtractionConflicts(regex: Extraction, ai: Extraction | null) {
   if (!ai) return [];
   const conflicts: string[] = [];
-  // Product name conflicts only when NO rule name aligns with ANY AI name — ignoring SDS/MSDS
-  // prefixes, file extensions, verbosity (containment), and shared product codes.
-  const ruleNames = [regex.product_name, regex.trade_name];
-  const aiNames = [ai.product_name, ai.trade_name];
-  if (!ruleNames.some((rule) => aiNames.some((value) => productNamesAlign(rule, value)))) {
+  // Product name conflicts only when both sides have a name and NO rule name aligns with ANY AI
+  // name — ignoring SDS/MSDS prefixes, file extensions, verbosity (containment), and shared codes.
+  // Only present names are compared; a missing name on either side must not silently "align".
+  const ruleNames = [regex.product_name, regex.trade_name].filter(Boolean);
+  const aiNames = [ai.product_name, ai.trade_name].filter(Boolean);
+  if (ruleNames.length && aiNames.length && !ruleNames.some((rule) => aiNames.some((value) => productNamesAlign(rule, value)))) {
     conflicts.push("Rule and AI extraction disagree on product name");
   }
   for (const field of ["revision_date", "issue_date"] as (keyof Extraction)[]) {
