@@ -1,12 +1,13 @@
 :root {
   color-scheme: light;
-  --navy-950: #071d2e;
-  --navy-900: #102a43;
-  --navy-800: #183b56;
-  --navy-700: #245171;
-  --blue-600: #0f6fb5;
-  --blue-100: #dceefb;
-  --blue-050: #f0f7fc;
+  --navy-950: #07233a;
+  --navy-900: #0d2c49;
+  --navy-800: #14406a;
+  --navy-700: #1c5894;
+  --blue-600: #1577be;
+  --blue-700: #0f5f9c;
+  --blue-100: #d7ecf9;
+  --blue-050: #eef6fc;
   --amber-500: #f6b73c;
   --amber-100: #fff0c7;
   --red-700: #a52a2a;
@@ -28,7 +29,7 @@
   --radius-md: 14px;
   --radius-lg: 20px;
   --content-width: 1180px;
-  --focus-ring: 0 0 0 3px rgba(15, 111, 181, 0.28);
+  --focus-ring: 0 0 0 3px rgba(21, 119, 190, 0.3);
 }
 
 *,
@@ -110,7 +111,7 @@ a {
 
 .header-accent {
   height: 4px;
-  background: linear-gradient(90deg, #f6b73c 0 70%, #db5b45 70% 100%);
+  background: linear-gradient(90deg, var(--blue-600) 0 65%, var(--navy-700) 65% 100%);
 }
 
 .header-inner {
@@ -399,8 +400,8 @@ a {
 
 .filter-button[aria-pressed="true"] {
   color: var(--white);
-  background: var(--navy-900);
-  border-color: var(--navy-900);
+  background: var(--blue-600);
+  border-color: var(--blue-600);
 }
 
 .count-badge {
