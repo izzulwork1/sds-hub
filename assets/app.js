@@ -451,9 +451,15 @@ function selectEmployeeLanguage(language, groupId) {
   if (language !== "en" && language !== "ms") return;
   state.preferredLanguage = language;
   try { localStorage.setItem("sdsEmployeeLang", language); } catch { /* storage blocked */ }
-  if (!groupId) return;
-  const variant = pickVariant(state.catalog.filter((item) => item.groupId === groupId), language);
-  if (variant) showDocument(variant);
+  // If this product has separate language variants, switch to the one for the chosen language.
+  if (groupId) {
+    const variant = pickVariant(state.catalog.filter((item) => item.groupId === groupId), language);
+    if (variant && variant.id !== state.selectedId) { showDocument(variant); return; }
+  }
+  // Otherwise (a single bilingual PDF, or the variant is already shown) keep the document but refresh
+  // the switcher so the selected language highlights — the bilingual PDF serves both languages.
+  const current = state.catalog.find((item) => item.id === state.selectedId);
+  if (current) renderLanguageSwitcher(current);
 }
 
 function showDocument(documentRecord, { updateHistory = true, scroll = true } = {}) {
