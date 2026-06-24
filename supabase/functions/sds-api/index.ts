@@ -391,7 +391,7 @@ async function listDocuments(url: URL, cors: Record<string, string> | null, acto
     const safe = query.replace(/[,*()]/g, " ").trim();
     filter += `&or=(product_name.ilike.*${encodeURIComponent(safe)}*,trade_name.ilike.*${encodeURIComponent(safe)}*,original_filename.ilike.*${encodeURIComponent(safe)}*)`;
   }
-  return json({ documents: await selectRows("sds_documents", filter) }, 200, cors);
+  return json({ documents: await attachDepartments(await selectRows("sds_documents", filter)) }, 200, cors);
 }
 
 async function getDocument(id: string, cors: Record<string, string> | null, actor: Actor) {
@@ -813,6 +813,27 @@ async function setDocumentDepartments(id: string, request: Request, cors: Record
   await history(id, "SET_DEPARTMENTS", document.status, document.status, actor, { department_ids: [...validIds] }, body.comment);
   await auditEvent(actor, "SET_DEPARTMENTS", document, body.comment, [...existingIds], [...validIds]);
   return json({ departments: await documentDepartments(id) }, 200, cors);
+}
+
+// Attach a department-name list to each document row (one batched query) for the master register.
+async function attachDepartments(rows: Record<string, any>[]) {
+  const ids = rows.map((row) => row.id).filter(Boolean);
+  if (!ids.length) return rows;
+  const [links, departments] = await Promise.all([
+    selectRows("sds_document_departments", `select=document_id,department_id&document_id=in.(${ids.join(",")})`),
+    selectRows("departments", "select=id,name")
+  ]);
+  const deptName = new Map<string, string>(departments.map((dept: Record<string, unknown>) => [String(dept.id), String(dept.name)] as [string, string]));
+  const byDoc = new Map<string, string[]>();
+  for (const link of links) {
+    const name = deptName.get(String(link.department_id));
+    if (!name) continue;
+    const list = byDoc.get(String(link.document_id)) || [];
+    list.push(name);
+    byDoc.set(String(link.document_id), list);
+  }
+  for (const row of rows) row.departments = byDoc.get(String(row.id)) || [];
+  return rows;
 }
 
 // Departments linked to one document: [{ id, name, is_active }].
@@ -1268,7 +1289,7 @@ function corsHeaders(request: Request): Record<string, string> | null {
   if (!allowed.includes(origin)) return null;
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type, apikey",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin"

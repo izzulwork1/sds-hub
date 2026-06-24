@@ -457,7 +457,7 @@ function buildDepartmentCard(documentId) {
   card.append(grid);
   if (isAdmin()) {
     const save = node("button", { type:"button", className:"secondary-action", textContent:"Save departments" });
-    save.addEventListener("click", () => saveDepartments(documentId, card));
+    save.addEventListener("click", handleAsync(() => saveDepartments(documentId, card)));
     card.append(node("div", { className:"grouping-actions" }, [save]));
   }
   return card;
@@ -886,7 +886,9 @@ function renderDocumentTable(container, documents, { compact = false, selectable
       checkbox.addEventListener("change", () => { checkbox.checked ? state.selectedIds.add(record.id) : state.selectedIds.delete(record.id); updateSelectedCount(); });
       const cell = node("td"); cell.append(checkbox); row.append(cell);
     }
-    row.append(node("td", { textContent:displayName(record) }));
+    const nameCell = node("td", {}, [node("span", { className:"doc-name", textContent:displayName(record) })]);
+    if (Array.isArray(record.departments) && record.departments.length) nameCell.append(node("span", { className:"doc-departments", textContent:record.departments.join(", ") }));
+    row.append(nameCell);
     if (!compact) row.append(node("td", { textContent:record.original_filename || "-" }));
     const statusCell = node("td"); const badge = node("span", { className:"status-badge", textContent:record.deleted_at ? "Deleted" : record.status });
     badge.dataset.status = record.deleted_at ? "Deleted" : record.status; statusCell.append(badge); row.append(statusCell);
