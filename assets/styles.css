@@ -1114,6 +1114,14 @@ a {
   margin: 3px 0;
 }
 
+.ai-response li > ul {
+  margin: 4px 0 2px;
+}
+
+.ai-response li > strong:first-child {
+  color: var(--navy-900);
+}
+
 .ai-answer-heading {
   margin: 11px 0 4px;
   color: var(--navy-900);

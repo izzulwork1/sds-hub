@@ -758,25 +758,34 @@ function updateQuestionCounter() {
   elements.questionCounter.textContent = `${elements.aiQuestion.value.length} / ${elements.aiQuestion.maxLength}`;
 }
 
-// Render the AI answer's light markdown (headings, bullets, **bold**) into safe DOM nodes — built with
-// textContent only (never innerHTML), so AI output cannot inject markup.
+// Render the AI answer's light markdown (headings, **bold**, and nested bullet lists) into safe DOM
+// nodes — built with textContent only (never innerHTML), so AI output cannot inject markup. Indented
+// bullets become nested <ul>s so grouped sub-points (e.g. PPE by body part) keep their structure.
 function renderAiAnswer(container, text) {
   container.replaceChildren();
-  let list = null;
-  const flushList = () => { if (list) { container.append(list); list = null; } };
+  const stack = []; // open lists by indent depth: [{ indent, ul }]
   for (const rawLine of String(text).replace(/\r/g, "").split("\n")) {
-    const line = rawLine.trim();
-    if (!line) { flushList(); continue; }
-    const bullet = line.match(/^(?:[*\-•]|\d+[.)])\s+(.*)$/);
+    const trimmed = rawLine.trim();
+    if (!trimmed) { stack.length = 0; continue; }
+    const indent = (rawLine.match(/^[ \t]*/)[0]).replace(/\t/g, "  ").length;
+    const bullet = trimmed.match(/^(?:[*\-•]|\d+[.)])\s+(.*)$/);
     if (bullet) {
-      if (!list) list = document.createElement("ul");
       const li = document.createElement("li");
       appendInlineMarkdown(li, bullet[1]);
-      list.append(li);
+      while (stack.length && stack[stack.length - 1].indent > indent) stack.pop();
+      let top = stack[stack.length - 1];
+      if (!top || indent > top.indent) {
+        const ul = document.createElement("ul");
+        if (top && top.ul.lastElementChild) top.ul.lastElementChild.append(ul); // nest under the parent bullet
+        else container.append(ul);
+        stack.push({ indent, ul });
+        top = stack[stack.length - 1];
+      }
+      top.ul.append(li);
       continue;
     }
-    flushList();
-    const heading = line.match(/^#{1,4}\s+(.*)$/) || line.match(/^\*\*(.+?)\*\*:?\s*$/);
+    stack.length = 0;
+    const heading = trimmed.match(/^#{1,4}\s+(.*)$/) || trimmed.match(/^\*\*(.+?)\*\*:?\s*$/);
     if (heading) {
       const node = document.createElement("p");
       node.className = "ai-answer-heading";
@@ -787,10 +796,9 @@ function renderAiAnswer(container, text) {
       continue;
     }
     const paragraph = document.createElement("p");
-    appendInlineMarkdown(paragraph, line);
+    appendInlineMarkdown(paragraph, trimmed);
     container.append(paragraph);
   }
-  flushList();
 }
 
 function appendInlineMarkdown(parent, text) {
