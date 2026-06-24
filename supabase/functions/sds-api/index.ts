@@ -1005,8 +1005,11 @@ async function askQuestion(request: Request, cors: Record<string, string> | null
     console.error("Ask Gemini failed", detail);
     // On the Gemini free tier a quick second question often trips the per-minute rate limit (HTTP 429).
     // Tell the worker it is a temporary, retryable limit rather than a generic outage.
+    if (/\b50[0235]\b|unavailable|high demand|overload/i.test(detail)) {
+      return json({ error: "The AI model is busy right now (high demand). Please try again in a moment." }, 503, { ...cors, "Retry-After": "15" });
+    }
     if (/\b429\b|quota|rate.?limit|resource.?exhausted/i.test(detail)) {
-      return json({ error: "The AI assistant is busy right now (free-tier rate limit). Please wait about a minute, then ask again." }, 429, { ...cors, "Retry-After": "60" });
+      return json({ error: "The AI assistant has hit its free-tier limit. Please wait about a minute, then ask again." }, 429, { ...cors, "Retry-After": "60" });
     }
     if (/abort|timeout|timed out|deadline/i.test(detail)) {
       return json({ error: "The AI assistant took too long to respond. Please try again in a moment." }, 504, cors);
@@ -1067,30 +1070,42 @@ async function fetchAskPdf(pdfUrl: string, maxBytes = ASK_PDF_MAX_BYTES) {
 
 async function answerFromSds(apiKey: string, resolved: { name: string; revisionDate: string }, question: string, pdfBytes: Uint8Array) {
   const model = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ASK_GEMINI_TIMEOUT_MS);
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const requestBody = JSON.stringify({
         system_instruction: { parts: [{ text: "You are a document-grounded workplace safety assistant. ALWAYS write your entire reply in the SAME language as the worker's question — if the worker asks in Malay/Bahasa Melayu, answer fully in Malay; if in English, answer in English; mirror their language even if the SDS itself is in another language. Answer ONLY from the attached official Safety Data Sheet. If the answer is not in this SDS, say (in the worker's language) that you cannot determine it from this document and point them to the relevant SDS section and the site safety manager. Never invent exposure limits, PPE, first-aid steps, incompatibilities, or disposal steps. Never override the SDS, the site emergency plan, emergency services, poison control, or medical professionals. Format the reply for easy reading: short bold section headings followed by simple '- ' bullet points, one fact per bullet, and name the SDS section numbers you used. Keep it complete and finish fully." }] },
         contents: [{ role: "user", parts: [
           { inline_data: { mime_type: "application/pdf", data: askBytesToBase64(pdfBytes) } },
           { text: `Product: ${resolved.name}\nSDS revision: ${resolved.revisionDate || "Not stated"}\nWorker question (reply in this question's language): ${question}` }
         ] }],
         generationConfig: { temperature: 0.1, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 512 } }
-      }),
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`Gemini returned HTTP ${response.status}`);
-    const payload = await response.json();
-    const answer = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text).filter((text: unknown) => typeof text === "string").join("\n").trim();
-    if (!answer) throw new Error("Gemini returned no answer");
-    return `Supplemental AI summary — verify against the official SDS:\n\n${answer}`;
-  } finally {
-    clearTimeout(timeout);
+  });
+  let lastError = "Gemini request failed";
+  // Gemini (especially the free tier) intermittently returns 503 "model is experiencing high demand".
+  // It is transient, so retry a few times with a short backoff before giving up.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ASK_GEMINI_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey }, body: requestBody, signal: controller.signal });
+      if ([429, 500, 502, 503].includes(response.status)) { lastError = `Gemini HTTP ${response.status} (transient)`; continue; }
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => "");
+        throw new Error(`Gemini HTTP ${response.status}: ${errBody.replace(/\s+/g, " ").slice(0, 220)}`);
+      }
+      const payload = await response.json();
+      const candidate = payload?.candidates?.[0];
+      const answer = candidate?.content?.parts?.map((part: { text?: string }) => part.text).filter((text: unknown) => typeof text === "string").join("\n").trim();
+      if (!answer) throw new Error(`Gemini returned no answer (finish: ${candidate?.finishReason || payload?.promptFeedback?.blockReason || "empty"})`);
+      return `Supplemental AI summary — verify against the official SDS:\n\n${answer}`;
+    } catch (error) {
+      lastError = safeError(error);
+      break; // non-transient (bad request, blocked answer, or timeout) — retrying would not help
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  throw new Error(lastError);
 }
 
 async function askRateAllowed(request: Request) {
