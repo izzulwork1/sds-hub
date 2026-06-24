@@ -5,7 +5,7 @@
  */
 window.SDS_CONFIG = Object.freeze({
   siteName: "Digital SDS Hub",
-  facilityName: "Facility safety library",
+  facilityName: "Safety library",
   emergencyLabel: "",
   emergencyHref: "",
   aiEnabled: true,

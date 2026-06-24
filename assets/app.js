@@ -27,7 +27,7 @@ const PDF_SIGNATURE = "%PDF-";
 
 const config = Object.freeze({
   siteName: "Digital SDS Hub",
-  facilityName: "Facility safety library",
+  facilityName: "Safety library",
   emergencyLabel: "",
   emergencyHref: "",
   aiEnabled: false,

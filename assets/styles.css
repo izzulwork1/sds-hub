@@ -131,8 +131,10 @@ a {
 }
 
 .brand-mark {
-  height: 34px;
+  height: 30px;
   width: auto;
+  max-width: 132px;
+  object-fit: contain;
   flex: 0 0 auto;
   display: block;
 }
